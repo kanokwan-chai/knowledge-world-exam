@@ -1,5 +1,6 @@
 import { AvatarConfig } from '../types/database';
 import { DEFAULT_AVATAR_CONFIG } from '../context/AuthContext';
+import { supabase } from './supabase';
 
 export interface StudentVaultProfile {
   identityKey: string; // e.g. "สมชาย ใจดี#045"
@@ -81,6 +82,105 @@ export function getActiveStudentVaultProfile(): StudentVaultProfile | null {
   return getStudentVaultProfile(activeKey);
 }
 
+function mapCloudRowToVault(row: Record<string, unknown>): StudentVaultProfile {
+  return {
+    identityKey: String(row.identity_key || ''),
+    displayIdentity: String(row.display_identity || ''),
+    realName: String(row.real_name || ''),
+    last3Digits: String(row.last_3_digits || '000'),
+    avatarConfig: (row.avatar_config as AvatarConfig) || DEFAULT_AVATAR_CONFIG,
+    walletCoins: Number(row.wallet_coins ?? 100),
+    totalAccumulatedExp: Number(row.total_accumulated_exp ?? 0),
+    level: Number(row.level ?? 1),
+    luckyTickets: Number(row.lucky_tickets ?? 1),
+    ownedItemCodes: Array.isArray(row.owned_item_codes) ? (row.owned_item_codes as string[]) : [],
+    gamesPlayed: Number(row.games_played ?? 0),
+    creditedKeys: Array.isArray(row.credited_keys) ? (row.credited_keys as string[]) : [],
+    updatedAt: String(row.last_seen_at || new Date().toISOString()),
+  };
+}
+
+/**
+ * Background fire-and-forget cloud sync to Supabase `student_identities`
+ * so the student's avatar, coins, level & unlocked items follow them to ANY device!
+ */
+export async function pushStudentVaultToCloud(profile: StudentVaultProfile): Promise<void> {
+  if (!/^\d{3}$/.test(profile.last3Digits)) return;
+  try {
+    await supabase.rpc('upsert_student_identity_cloud', {
+      p_identity_key: profile.identityKey,
+      p_display_identity: profile.displayIdentity,
+      p_real_name: profile.realName,
+      p_last_3_digits: profile.last3Digits,
+      p_avatar_config: profile.avatarConfig,
+      p_wallet_coins: profile.walletCoins,
+      p_total_accumulated_exp: profile.totalAccumulatedExp,
+      p_level: profile.level,
+      p_lucky_tickets: profile.luckyTickets,
+      p_owned_item_codes: profile.ownedItemCodes,
+      p_games_played: profile.gamesPlayed,
+      p_credited_keys: profile.creditedKeys.slice(-200),
+    });
+  } catch {
+    // Gracefully ignore if migration 004 hasn't been executed yet or network is offline
+  }
+}
+
+/**
+ * Fetches student's cloud profile from Supabase by Real Name + Last 3 Digits (works on ANY new device!)
+ * and caches it locally so UI updates immediately.
+ */
+export async function fetchStudentVaultFromCloud(
+  realName: string,
+  last3Digits: string
+): Promise<StudentVaultProfile | null> {
+  const key = normalizeStudentIdentityKey(realName, last3Digits);
+  if (!key || !/^\d{3}$/.test(last3Digits.trim())) return null;
+
+  try {
+    const { data, error } = await supabase.rpc('get_student_identity_cloud', {
+      p_identity_key: key,
+    });
+    if (error || !data) {
+      return getStudentVaultProfile(key);
+    }
+
+    const cloudProfile = mapCloudRowToVault(data as Record<string, unknown>);
+    const localProfile = getStudentVaultProfile(key);
+
+    // Merge local & cloud safely (never lose unlocked items)
+    const merged: StudentVaultProfile = localProfile
+      ? {
+          ...cloudProfile,
+          ownedItemCodes: Array.from(
+            new Set([...cloudProfile.ownedItemCodes, ...localProfile.ownedItemCodes])
+          ),
+          creditedKeys: Array.from(
+            new Set([...cloudProfile.creditedKeys, ...localProfile.creditedKeys])
+          ).slice(-300),
+          totalAccumulatedExp: Math.max(
+            cloudProfile.totalAccumulatedExp,
+            localProfile.totalAccumulatedExp
+          ),
+          level: Math.max(cloudProfile.level, localProfile.level),
+          gamesPlayed: Math.max(cloudProfile.gamesPlayed, localProfile.gamesPlayed),
+        }
+      : cloudProfile;
+
+    setActiveStudentIdentityKey(merged.identityKey);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(
+        `${VAULT_STORAGE_PREFIX}${merged.identityKey}`,
+        JSON.stringify(merged)
+      );
+      window.localStorage.setItem('kw_local_avatar', JSON.stringify(merged.avatarConfig));
+    }
+    return merged;
+  } catch {
+    return getStudentVaultProfile(key);
+  }
+}
+
 function persistVaultProfile(profile: StudentVaultProfile): StudentVaultProfile {
   if (typeof window !== 'undefined') {
     window.localStorage.setItem(
@@ -89,6 +189,8 @@ function persistVaultProfile(profile: StudentVaultProfile): StudentVaultProfile 
     );
     window.localStorage.setItem('kw_local_avatar', JSON.stringify(profile.avatarConfig));
   }
+  // Sync to Supabase cloud in the background for cross-device recall
+  void pushStudentVaultToCloud(profile);
   return profile;
 }
 

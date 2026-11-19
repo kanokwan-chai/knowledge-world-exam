@@ -19,8 +19,10 @@ import { joinGameRoomRPC } from '../services/gameEngineService';
 import { formatStudentExamIdentity } from '../lib/securityGuard';
 import {
   ensureStudentVaultProfile,
+  fetchStudentVaultFromCloud,
   getStudentVaultProfile,
   saveStudentVaultAvatar,
+  StudentVaultProfile,
 } from '../lib/studentIdentityVault';
 import { AvatarSlot } from '../types/database';
 import { soundEngine } from '../lib/soundEngine';
@@ -50,12 +52,38 @@ export const LandingPage: React.FC = () => {
   const [joinError, setJoinError] = useState<string | null>(null);
   const [activeSlot, setActiveSlot] = useState<AvatarSlot>('hat');
 
-  // Auto-recognize returning student by Real Name + Last 3 Digits of Student ID
-  const matchedVault = useMemo(() => {
+  const [cloudVault, setCloudVault] = useState<StudentVaultProfile | null>(null);
+
+  // Auto-recognize returning student by Real Name + Last 3 Digits (Local + Supabase Cloud across ANY device!)
+  const localVault = useMemo(() => {
     if (realName.trim().length >= 2 && /^\d{3}$/.test(studentIdLast3.trim())) {
       return getStudentVaultProfile(realName, studentIdLast3);
     }
     return null;
+  }, [realName, studentIdLast3]);
+
+  const matchedVault = cloudVault || localVault;
+
+  useEffect(() => {
+    if (realName.trim().length < 2 || !/^\d{3}$/.test(studentIdLast3.trim())) {
+      setCloudVault(null);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      fetchStudentVaultFromCloud(realName.trim(), studentIdLast3.trim())
+        .then((res) => {
+          if (!cancelled && res) {
+            setCloudVault(res);
+            setLocalAvatarConfig(res.avatarConfig, res.displayIdentity);
+          }
+        })
+        .catch(() => {});
+    }, 350);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [realName, studentIdLast3]);
 
   useEffect(() => {
@@ -92,12 +120,16 @@ export const LandingPage: React.FC = () => {
         // Ignore storage errors
       }
 
-      // Load or create persistent Student Identity Vault (remembers avatar, coins & level across games!)
-      const vault = ensureStudentVaultProfile(realName.trim(), studentIdLast3.trim(), avatarConfig);
-      // Save any quick starter tweaks made on LandingPage back to the student's vault
-      saveStudentVaultAvatar(vault.identityKey, avatarConfig);
+      // Load from Supabase Cloud first (works across ANY phone/computer!), else create new vault
+      const fromCloud = await fetchStudentVaultFromCloud(realName.trim(), studentIdLast3.trim()).catch(
+        () => null
+      );
+      const vault =
+        fromCloud || ensureStudentVaultProfile(realName.trim(), studentIdLast3.trim(), avatarConfig);
+      const activeAvatar = fromCloud ? fromCloud.avatarConfig : avatarConfig;
+      saveStudentVaultAvatar(vault.identityKey, activeAvatar);
 
-      const participant = await joinGameRoomRPC(cleanPin, identity.formatted, avatarConfig);
+      const participant = await joinGameRoomRPC(cleanPin, identity.formatted, activeAvatar);
       soundEngine.playPowerUpSound();
       window.sessionStorage.setItem(
         `kw_participant_${participant.room_id}`,

@@ -1455,3 +1455,212 @@ export function exportScoresToCSV(scores: ScoreRecord[], quizTitle: string): voi
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
 }
+
+
+// ============================================================================
+// TEACHER STUDENT DIRECTORY & CROSS-STAGE ACTIVITY TRACKER
+// ============================================================================
+
+export interface TeacherStudentSessionRecord {
+  room_id: string;
+  pin_code: string;
+  quiz_title: string;
+  game_mode: string;
+  joined_at: string;
+  real_exam_score: number;
+  game_exp_score: number;
+  is_disqualified: boolean;
+  disqualified_reason: string | null;
+}
+
+export interface TeacherStudentActivitySummary {
+  identity_key: string;
+  display_name: string;
+  avatar_config: AvatarConfig;
+  wallet_coins: number;
+  level: number;
+  total_accumulated_exp: number;
+  owned_items_count: number;
+  total_sessions: number;
+  serious_exam_count: number;
+  activity_game_count: number;
+  total_real_exam_correct: number;
+  disqualified_count: number;
+  last_active_at: string;
+  sessions: TeacherStudentSessionRecord[];
+}
+
+function normalizeNicknameKey(nickname: string): string {
+  const cleaned = (nickname || '').trim().replace(/\s+/g, ' ');
+  const m = cleaned.match(/^(.+?)\s*\(#(\d{3})\)$/);
+  if (m) return `${m[1].trim().toLowerCase()}#${m[2]}`;
+  return cleaned.toLowerCase();
+}
+
+export async function fetchTeacherStudentDirectory(teacherId: string): Promise<{
+  students: TeacherStudentActivitySummary[];
+  cloudTableReady: boolean;
+}> {
+  const { data: rooms, error: roomErr } = await supabase
+    .from('game_rooms')
+    .select('id, pin_code, game_mode, created_at, quizzes(title, subject)')
+    .eq('host_teacher_id', teacherId)
+    .order('created_at', { ascending: false })
+    .limit(150);
+
+  if (roomErr) throw new Error(roomErr.message);
+
+  const roomList = (rooms ?? []) as unknown as Array<{
+    id: string;
+    pin_code: string;
+    game_mode: string;
+    created_at: string;
+    quizzes?: { title: string; subject: string } | null;
+  }>;
+
+  const roomMap = new Map(roomList.map((r) => [r.id, r]));
+  const roomIds = roomList.map((r) => r.id);
+
+  let participants: GameParticipant[] = [];
+  if (roomIds.length > 0) {
+    const { data: partsData } = await supabase
+      .from('game_participants')
+      .select('*')
+      .in('room_id', roomIds)
+      .order('joined_at', { ascending: false });
+    participants = (partsData ?? []) as GameParticipant[];
+  }
+
+  // Also check Supabase Cloud Student Vault (`student_identities`) if migration 004 has been applied
+  let cloudTableReady = false;
+  const cloudMap = new Map<
+    string,
+    {
+      identity_key: string;
+      display_identity: string;
+      avatar_config: AvatarConfig;
+      wallet_coins: number;
+      total_accumulated_exp: number;
+      level: number;
+      owned_item_codes: string[];
+      last_seen_at: string;
+    }
+  >();
+
+  try {
+    const { data: cloudRows, error: cloudErr } = await supabase
+      .from('student_identities')
+      .select('*')
+      .order('last_seen_at', { ascending: false })
+      .limit(300);
+
+    if (!cloudErr && cloudRows) {
+      cloudTableReady = true;
+      for (const r of cloudRows as Array<Record<string, unknown>>) {
+        const key = String(r.identity_key || '').toLowerCase();
+        if (!key) continue;
+        cloudMap.set(key, {
+          identity_key: key,
+          display_identity: String(r.display_identity || key),
+          avatar_config: (r.avatar_config as AvatarConfig) || {
+            gender: 'female',
+            face: 'face_hero',
+            base: 'explorer_red',
+            hair: 'wavy_crimson',
+            outfit: 'dress_princess',
+            hat: 'bow_ribbon',
+            accessory: 'star_badge',
+          },
+          wallet_coins: Number(r.wallet_coins ?? 0),
+          total_accumulated_exp: Number(r.total_accumulated_exp ?? 0),
+          level: Number(r.level ?? 1),
+          owned_item_codes: Array.isArray(r.owned_item_codes)
+            ? (r.owned_item_codes as string[])
+            : [],
+          last_seen_at: String(r.last_seen_at || new Date().toISOString()),
+        });
+      }
+    }
+  } catch {
+    cloudTableReady = false;
+  }
+
+  const studentMap = new Map<string, TeacherStudentActivitySummary>();
+
+  // 1) Seed from cloud profiles so even students who customized avatar before joining appear
+  cloudMap.forEach((c, key) => {
+    studentMap.set(key, {
+      identity_key: key,
+      display_name: c.display_identity,
+      avatar_config: c.avatar_config,
+      wallet_coins: c.wallet_coins,
+      level: c.level,
+      total_accumulated_exp: c.total_accumulated_exp,
+      owned_items_count: c.owned_item_codes.length,
+      total_sessions: 0,
+      serious_exam_count: 0,
+      activity_game_count: 0,
+      total_real_exam_correct: 0,
+      disqualified_count: 0,
+      last_active_at: c.last_seen_at,
+      sessions: [],
+    });
+  });
+
+  // 2) Merge all exam & activity sessions from `game_participants`
+  for (const p of participants) {
+    const rm = roomMap.get(p.room_id);
+    if (!rm) continue;
+    const key = normalizeNicknameKey(p.nickname);
+    const existing = studentMap.get(key);
+    const isSerious = rm.game_mode === 'serious_exam';
+
+    const sessionRec: TeacherStudentSessionRecord = {
+      room_id: rm.id,
+      pin_code: rm.pin_code,
+      quiz_title: rm.quizzes?.title || 'ชุดข้อสอบ',
+      game_mode: rm.game_mode,
+      joined_at: p.joined_at || rm.created_at,
+      real_exam_score: p.is_disqualified ? 0 : p.correct_count,
+      game_exp_score: p.is_disqualified ? 0 : p.current_score,
+      is_disqualified: Boolean(p.is_disqualified),
+      disqualified_reason: p.disqualified_reason || null,
+    };
+
+    if (!existing) {
+      studentMap.set(key, {
+        identity_key: key,
+        display_name: p.nickname,
+        avatar_config: p.avatar_config,
+        wallet_coins: 0,
+        level: 1,
+        total_accumulated_exp: p.is_disqualified ? 0 : p.current_score,
+        owned_items_count: 0,
+        total_sessions: 1,
+        serious_exam_count: isSerious ? 1 : 0,
+        activity_game_count: isSerious ? 0 : 1,
+        total_real_exam_correct: p.is_disqualified ? 0 : p.correct_count,
+        disqualified_count: p.is_disqualified ? 1 : 0,
+        last_active_at: sessionRec.joined_at,
+        sessions: [sessionRec],
+      });
+    } else {
+      existing.total_sessions += 1;
+      if (isSerious) existing.serious_exam_count += 1;
+      else existing.activity_game_count += 1;
+      existing.total_real_exam_correct += p.is_disqualified ? 0 : p.correct_count;
+      if (p.is_disqualified) existing.disqualified_count += 1;
+      if (new Date(sessionRec.joined_at).getTime() > new Date(existing.last_active_at).getTime()) {
+        existing.last_active_at = sessionRec.joined_at;
+        existing.avatar_config = p.avatar_config || existing.avatar_config;
+      }
+      existing.sessions.push(sessionRec);
+    }
+  }
+
+  const students = Array.from(studentMap.values()).sort(
+    (a, b) => new Date(b.last_active_at).getTime() - new Date(a.last_active_at).getTime()
+  );
+
+  return { students, cloudTableReady };
+}

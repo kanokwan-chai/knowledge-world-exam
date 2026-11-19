@@ -40,6 +40,7 @@ import { soundEngine } from '../lib/soundEngine';
 import { formatStudentExamIdentity } from '../lib/securityGuard';
 import {
   ensureStudentVaultProfile,
+  fetchStudentVaultFromCloud,
   getActiveStudentVaultProfile,
   purchaseStudentVaultItem,
   saveStudentVaultAvatar,
@@ -86,7 +87,7 @@ export const StudentDashboard: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const handleLoadOrSwitchStudentVault = (e: React.FormEvent) => {
+  const handleLoadOrSwitchStudentVault = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     const check = formatStudentExamIdentity(idNameInput, idLast3Input);
@@ -95,20 +96,31 @@ export const StudentDashboard: React.FC = () => {
       setError(check.error || 'กรุณากรอกชื่อจริงและเลข 3 ตัวหลังรหัสนักเรียน');
       return;
     }
-    const loaded = ensureStudentVaultProfile(idNameInput.trim(), idLast3Input.trim(), avatarConfig);
-    setVaultProfile(loaded);
-    setCustomAvatarName(loaded.displayIdentity);
-    setLocalAvatarConfig(loaded.avatarConfig, loaded.displayIdentity);
+    setBusy(true);
     try {
-      window.localStorage.setItem('kw_student_real_name', idNameInput.trim());
-      window.localStorage.setItem('kw_student_id_last3', idLast3Input.trim());
-    } catch {
-      // ignore
+      const fromCloud = await fetchStudentVaultFromCloud(
+        idNameInput.trim(),
+        idLast3Input.trim()
+      ).catch(() => null);
+      const loaded =
+        fromCloud ||
+        ensureStudentVaultProfile(idNameInput.trim(), idLast3Input.trim(), avatarConfig);
+      setVaultProfile(loaded);
+      setCustomAvatarName(loaded.displayIdentity);
+      setLocalAvatarConfig(loaded.avatarConfig, loaded.displayIdentity);
+      try {
+        window.localStorage.setItem('kw_student_real_name', idNameInput.trim());
+        window.localStorage.setItem('kw_student_id_last3', idLast3Input.trim());
+      } catch {
+        // ignore
+      }
+      soundEngine.playPowerUpSound();
+      setNotice(
+        `โหลดโปรไฟล์ "${loaded.displayIdentity}" เรียบร้อย! (เหรียญสะสม: ${loaded.walletCoins.toLocaleString()} • Lv.${loaded.level})`
+      );
+    } finally {
+      setBusy(false);
     }
-    soundEngine.playPowerUpSound();
-    setNotice(
-      `โหลดโปรไฟล์ "${loaded.displayIdentity}" เรียบร้อย! (เหรียญสะสม: ${loaded.walletCoins.toLocaleString()} • Lv.${loaded.level})`
-    );
   };
 
   const loadStudentHub = useCallback(async () => {

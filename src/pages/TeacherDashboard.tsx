@@ -29,7 +29,11 @@ import {
   Pencil,
   Eye,
   RotateCcw,
+  Search,
+  Coins,
 } from 'lucide-react';
+import { AvatarRenderer } from '../components/avatar/AvatarRenderer';
+import studentCloudSql from '../../supabase/migrations/004_student_cloud_vault.sql?raw';
 import { useAuth } from '../context/AuthContext';
 import {
   isTeacherGateUnlocked,
@@ -83,8 +87,10 @@ import {
   fetchTeacherExamRooms,
   fetchTeacherGameHistory,
   fetchTeacherQuizzes,
+  fetchTeacherStudentDirectory,
   saveQuestionWithChoices,
   swapQuestionSortOrder,
+  TeacherStudentActivitySummary,
   updateQuestionImageOnly,
   updateQuizDetails,
   uploadQuestionImage,
@@ -133,8 +139,13 @@ export const TeacherDashboard: React.FC = () => {
   );
 
   const [activeTab, setActiveTab] = useState<
-    'live_matrix' | 'overview' | 'quizzes' | 'classrooms' | 'history'
+    'live_matrix' | 'overview' | 'quizzes' | 'students' | 'classrooms' | 'history'
   >('quizzes');
+  const [studentDirectory, setStudentDirectory] = useState<TeacherStudentActivitySummary[]>([]);
+  const [cloudVaultReady, setCloudVaultReady] = useState<boolean>(false);
+  const [studentSearchQuery, setStudentSearchQuery] = useState<string>('');
+  const [expandedTrackerKey, setExpandedTrackerKey] = useState<string | null>(null);
+  const [copiedCloudSql, setCopiedCloudSql] = useState<boolean>(false);
   const [classrooms, setClassrooms] = useState<Classroom[]>(() =>
     isDemoDataEnabled() ? DEMO_CLASSROOMS : []
   );
@@ -225,16 +236,22 @@ export const TeacherDashboard: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const [cls, qzs, hist, rooms] = await Promise.all([
+      const [cls, qzs, hist, rooms, dir] = await Promise.all([
         fetchTeacherClassrooms(user.id),
         fetchTeacherQuizzes(user.id),
         fetchTeacherGameHistory(user.id),
         fetchTeacherExamRooms(user.id).catch(() => []),
+        fetchTeacherStudentDirectory(user.id).catch(() => ({
+          students: [],
+          cloudTableReady: false,
+        })),
       ]);
       setClassrooms(cls);
       setQuizzes(qzs);
       setHistory(hist);
       setExamRooms(rooms);
+      setStudentDirectory(dir.students);
+      setCloudVaultReady(dir.cloudTableReady);
 
       setSelectedClassroomId((prev) => prev ?? (cls[0]?.id ?? null));
       setSelectedQuiz((prev) =>
@@ -1079,9 +1096,10 @@ export const TeacherDashboard: React.FC = () => {
         {[
           { id: 'live_matrix', label: '📊 แดชบอร์ดคะแนนเรียลไทม์ข้อต่อข้อ & 3D Battle', icon: Swords },
           { id: 'quizzes', label: 'จัดการชุดคำถาม / ตั้งเวลารายข้อ', icon: BookOpen },
+          { id: 'students', label: `👨‍🎓 ข้อมูลนักเรียนรายคน (${studentDirectory.length})`, icon: Users },
           { id: 'overview', label: 'ภาพรวม & กราฟผลการเรียน', icon: BarChart3 },
-          { id: 'classrooms', label: 'ห้องเรียน & รายชื่อนักเรียน', icon: Users },
-          { id: 'history', label: 'ประวัติการแข่งขัน & รายงาน Excel', icon: History },
+          { id: 'classrooms', label: 'ห้องเรียน', icon: School },
+          { id: 'history', label: 'ประวัติการจัดสอบ & รายงาน Excel', icon: History },
         ].map((t) => {
           const Icon = t.icon;
           return (
@@ -1977,6 +1995,271 @@ export const TeacherDashboard: React.FC = () => {
                   </div>
                 </form>
               </>
+          </div>
+        </div>
+      )}
+
+      {/* TAB: STUDENT DIRECTORY & CROSS-STAGE ACTIVITY TRACKER */}
+      {!loading && activeTab === 'students' && (
+        <div className="space-y-5">
+          {/* Cloud Sync Status & 1-Click SQL Migration Helper if needed */}
+          <div
+            className={`card-game p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3 ${
+              cloudVaultReady ? 'bg-emerald-50 border-emerald-700' : 'bg-amber-50 border-amber-700'
+            }`}
+          >
+            <div className="space-y-0.5 text-xs sm:text-sm font-bold text-slate-900">
+              <div className="font-game text-base font-extrabold">
+                {cloudVaultReady
+                  ? '☁️ ระบบจำตัวละคร & เหรียญสะสมข้ามเครื่อง (Supabase Cloud): เปิดใช้งานแล้ว!'
+                  : '☁️ เปิดใช้งานระบบจำตัวละครข้ามเครื่อง (รัน SQL 1 ครั้งใน Supabase)'}
+              </div>
+              <p className="text-xs text-slate-700">
+                {cloudVaultReady
+                  ? 'นักเรียนสามารถเข้าจากเครื่องไหนก็ได้ แค่พิมพ์ชื่อจริง + เลข 3 ตัวหลังเดิม ตัวละคร เหรียญ และของแต่งจะโหลดจาก Cloud ทันที!'
+                  : 'คุณครูดูประวัติการเข้าสอบทุกด่านของเด็กได้ทันทีด้านล่าง — และหากรัน SQL 004 ใน Supabase 1 ครั้ง เด็กจะย้ายเครื่องแล้วดึงตัวละคร+เหรียญสะสมเดิมกลับมาได้จากทุกเครื่องครับ'}
+              </p>
+            </div>
+
+            {!cloudVaultReady && (
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await navigator.clipboard.writeText(studentCloudSql);
+                    setCopiedCloudSql(true);
+                    soundEngine.playCoinSound();
+                    setTimeout(() => setCopiedCloudSql(false), 3500);
+                  }}
+                  className="btn-game-yellow text-xs py-2 px-4"
+                >
+                  {copiedCloudSql
+                    ? '✅ คัดลอก SQL แล้ว! วางใน Supabase SQL Editor แล้วกด RUN'
+                    : '📋 คัดลอก SQL เปิดระบบจำตัวละครข้ามเครื่อง'}
+                </button>
+                {(() => {
+                  const ref = getSupabaseProjectRef();
+                  return ref ? (
+                    <a
+                      href={`https://supabase.com/dashboard/project/${ref}/sql/new`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-3.5 py-2 rounded-xl bg-kw-blue text-white border-2 border-slate-900 font-bold text-xs"
+                    >
+                      เปิด Supabase SQL Editor ↗
+                    </a>
+                  ) : null;
+                })()}
+              </div>
+            )}
+          </div>
+
+          <div className="card-game p-5 sm:p-6 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="font-game text-2xl font-extrabold text-slate-900">
+                  👨‍🎓 ทะเบียนนักเรียน &amp; ประวัติการเข้าสอบ/เล่นทุกด่าน ({studentDirectory.length} คน)
+                </h2>
+                <p className="text-xs font-bold text-slate-600">
+                  ค้นหาด้วยชื่อจริงหรือเลข 3 ตัวหลัง แล้วคลิกที่ชื่อนักเรียนเพื่อดูประวัติทุกด่านที่เคยเข้าเล่นหรือสอบ
+                </p>
+              </div>
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                <div className="relative flex-1 sm:w-72">
+                  <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                  <input
+                    type="text"
+                    value={studentSearchQuery}
+                    onChange={(e) => setStudentSearchQuery(e.target.value)}
+                    placeholder="ค้นหาชื่อจริง หรือเลข 3 ตัวหลัง..."
+                    className="w-full rounded-xl border-2 border-slate-900 pl-9 pr-3 py-2 text-xs font-bold bg-white"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={loadDashboardData}
+                  className="px-3 py-2 rounded-xl bg-white border-2 border-slate-900 text-xs font-extrabold flex items-center gap-1 shrink-0"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" /> รีเฟรช
+                </button>
+              </div>
+            </div>
+
+            {(() => {
+              const q = studentSearchQuery.trim().toLowerCase();
+              const filtered = q
+                ? studentDirectory.filter(
+                    (s) =>
+                      s.display_name.toLowerCase().includes(q) ||
+                      s.identity_key.toLowerCase().includes(q)
+                  )
+                : studentDirectory;
+
+              if (filtered.length === 0) {
+                return (
+                  <p className="text-sm font-bold text-slate-600 py-8 text-center">
+                    {studentDirectory.length === 0
+                      ? 'ยังไม่มีข้อมูลนักเรียนเข้าสอบหรือเล่นกิจกรรม (เมื่อเด็กสแกนเข้าห้องสอบ รายชื่อและประวัติทุกด่านจะถูกบันทึกที่นี่อัตโนมัติ)'
+                      : 'ไม่พบนักเรียนที่ตรงกับคำค้นหา'}
+                  </p>
+                );
+              }
+
+              return (
+                <div className="space-y-3">
+                  {filtered.map((st) => {
+                    const isOpen = expandedTrackerKey === st.identity_key;
+                    return (
+                      <div
+                        key={st.identity_key}
+                        className="rounded-2xl border-3 border-slate-900 bg-white overflow-hidden"
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedTrackerKey(isOpen ? null : st.identity_key)
+                          }
+                          className={`w-full p-3.5 sm:p-4 text-left flex flex-wrap items-center justify-between gap-3 transition ${
+                            isOpen ? 'bg-amber-100' : 'hover:bg-slate-50'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <AvatarRenderer
+                              config={st.avatar_config}
+                              size="sm"
+                              animate={false}
+                            />
+                            <div className="min-w-0">
+                              <div className="font-game text-base sm:text-lg font-extrabold text-slate-900 flex items-center gap-2 truncate">
+                                <span>{isOpen ? '▼' : '▶'}</span>
+                                <span className="truncate">{st.display_name}</span>
+                                <span className="px-2 py-0.5 rounded-full bg-kw-blue text-white text-[10px] font-extrabold shrink-0">
+                                  Lv.{st.level}
+                                </span>
+                              </div>
+                              <div className="text-[11px] font-bold text-slate-600 flex flex-wrap items-center gap-2">
+                                <span>เข้าทั้งหมด {st.total_sessions} ด่าน</span>
+                                <span>•</span>
+                                <span>📝 สอบจริง {st.serious_exam_count} ครั้ง</span>
+                                <span>•</span>
+                                <span>🏆 กิจกรรม {st.activity_game_count} ครั้ง</span>
+                                {st.disqualified_count > 0 && (
+                                  <span className="px-1.5 py-0.5 rounded bg-red-600 text-white text-[10px]">
+                                    🚨 ทุจริต {st.disqualified_count} ครั้ง
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2 text-xs font-extrabold">
+                            <span className="px-2.5 py-1 rounded-xl bg-emerald-100 border-2 border-emerald-700 text-emerald-950">
+                              ตอบถูกรวม {st.total_real_exam_correct} ข้อ
+                            </span>
+                            {cloudVaultReady && (
+                              <span className="px-2.5 py-1 rounded-xl bg-kw-yellow border-2 border-slate-900 text-slate-900 inline-flex items-center gap-1">
+                                <Coins className="w-3.5 h-3.5 text-amber-800" />
+                                {st.wallet_coins.toLocaleString()}
+                              </span>
+                            )}
+                            <span className="text-[11px] text-slate-500">
+                              ล่าสุด:{' '}
+                              {new Date(st.last_active_at).toLocaleString('th-TH', {
+                                dateStyle: 'short',
+                                timeStyle: 'short',
+                              })}
+                            </span>
+                          </div>
+                        </button>
+
+                        {/* Expanded Stage-by-Stage History for This Student */}
+                        {isOpen && (
+                          <div className="p-4 border-t-2 border-slate-900 bg-amber-50/50 space-y-2.5">
+                            <div className="font-game text-xs font-extrabold text-slate-800">
+                              📋 ประวัติการเข้าสอบและเล่นกิจกรรมทุกด่านของ {st.display_name}:
+                            </div>
+                            {st.sessions.length === 0 ? (
+                              <p className="text-xs font-bold text-slate-500">
+                                ลงทะเบียนตัวละครไว้แล้ว แต่ยังไม่ได้เข้าเล่นด่านใด
+                              </p>
+                            ) : (
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-left border-collapse text-xs bg-white rounded-xl overflow-hidden border border-slate-300">
+                                  <thead>
+                                    <tr className="bg-slate-900 text-white font-game">
+                                      <th className="p-2">วัน-เวลา</th>
+                                      <th className="p-2">ชื่อด่าน / ชุดข้อสอบ</th>
+                                      <th className="p-2">โหมด</th>
+                                      <th className="p-2 text-center">PIN</th>
+                                      <th className="p-2 text-center">คะแนนสอบจริง</th>
+                                      <th className="p-2 text-center">EXP เกม</th>
+                                      <th className="p-2 text-center">สถานะ</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {st.sessions.map((ses, idx) => (
+                                      <tr
+                                        key={`${ses.room_id}_${idx}`}
+                                        className={`border-b border-slate-200 ${
+                                          ses.is_disqualified ? 'bg-red-50' : ''
+                                        }`}
+                                      >
+                                        <td className="p-2 whitespace-nowrap text-slate-700 font-semibold">
+                                          {new Date(ses.joined_at).toLocaleString('th-TH', {
+                                            dateStyle: 'short',
+                                            timeStyle: 'short',
+                                          })}
+                                        </td>
+                                        <td className="p-2 font-bold text-slate-900">
+                                          {ses.quiz_title}
+                                        </td>
+                                        <td className="p-2 whitespace-nowrap">
+                                          <span
+                                            className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
+                                              ses.game_mode === 'serious_exam'
+                                                ? 'bg-slate-900 text-kw-yellow'
+                                                : 'bg-kw-orange text-white'
+                                            }`}
+                                          >
+                                            {ses.game_mode === 'serious_exam'
+                                              ? '📝 สอบจริง'
+                                              : '🏆 กิจกรรม'}
+                                          </span>
+                                        </td>
+                                        <td className="p-2 text-center font-mono font-bold text-kw-blue">
+                                          {ses.pin_code}
+                                        </td>
+                                        <td className="p-2 text-center font-game font-extrabold text-emerald-800">
+                                          {ses.real_exam_score} คะแนน
+                                        </td>
+                                        <td className="p-2 text-center font-bold text-slate-700">
+                                          {ses.game_exp_score.toLocaleString()}
+                                        </td>
+                                        <td className="p-2 text-center whitespace-nowrap">
+                                          {ses.is_disqualified ? (
+                                            <span className="px-2 py-0.5 rounded-full bg-red-600 text-white text-[10px] font-extrabold">
+                                              ทุจริต ({ses.disqualified_reason || 'สลับจอ'})
+                                            </span>
+                                          ) : (
+                                            <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-900 text-[10px] font-extrabold">
+                                              ปกติ ✓
+                                            </span>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </div>
         </div>
       )}
