@@ -2095,6 +2095,27 @@ export const TeacherDashboard: React.FC = () => {
               </div>
             </div>
 
+            {error && (
+              <div className="p-3.5 rounded-2xl bg-red-100 border-2 border-red-600 text-red-900 text-xs font-bold flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{error}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await navigator.clipboard.writeText(studentCloudSql);
+                    setCopiedCloudSql(true);
+                    soundEngine.playCoinSound();
+                    setTimeout(() => setCopiedCloudSql(false), 3500);
+                  }}
+                  className="px-3 py-1 rounded-lg bg-kw-yellow text-slate-900 border-2 border-slate-900 font-extrabold text-xs shrink-0"
+                >
+                  {copiedCloudSql ? '✅ คัดลอกแล้ว! กดวาง RUN ใน Supabase' : '📋 คัดลอก SQL เพื่อเปิดสิทธิ์ลบ'}
+                </button>
+              </div>
+            )}
+
             {(() => {
               const q = studentSearchQuery.trim().toLowerCase();
               const filtered = q
@@ -2124,16 +2145,18 @@ export const TeacherDashboard: React.FC = () => {
                         key={st.identity_key}
                         className="rounded-2xl border-3 border-slate-900 bg-white overflow-hidden"
                       >
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setExpandedTrackerKey(isOpen ? null : st.identity_key)
-                          }
-                          className={`w-full p-3.5 sm:p-4 text-left flex flex-wrap items-center justify-between gap-3 transition ${
+                        <div
+                          className={`w-full p-3.5 sm:p-4 flex flex-wrap items-center justify-between gap-3 transition ${
                             isOpen ? 'bg-amber-100' : 'hover:bg-slate-50'
                           }`}
                         >
-                          <div className="flex items-center gap-3 min-w-0">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setExpandedTrackerKey(isOpen ? null : st.identity_key)
+                            }
+                            className="flex items-center gap-3 min-w-0 flex-1 text-left cursor-pointer"
+                          >
                             <AvatarRenderer
                               config={st.avatar_config}
                               size="sm"
@@ -2160,7 +2183,7 @@ export const TeacherDashboard: React.FC = () => {
                                 )}
                               </div>
                             </div>
-                          </div>
+                          </button>
 
                           <div className="flex flex-wrap items-center gap-2 text-xs font-extrabold">
                             <span className="px-2.5 py-1 rounded-xl bg-emerald-100 border-2 border-emerald-700 text-emerald-950">
@@ -2179,11 +2202,9 @@ export const TeacherDashboard: React.FC = () => {
                                 timeStyle: 'short',
                               })}
                             </span>
-                            <span
-                              role="button"
-                              tabIndex={0}
-                              onClick={async (e) => {
-                                e.stopPropagation();
+                            <button
+                              type="button"
+                              onClick={async () => {
                                 if (
                                   !window.confirm(
                                     `ยืนยันลบข้อมูลนักเรียน "${st.display_name}" ออกจากระบบทั้งหมดใช่หรือไม่?`
@@ -2200,18 +2221,19 @@ export const TeacherDashboard: React.FC = () => {
                                   soundEngine.playClickSound();
                                   setSaveSuccess(`✅ ลบข้อมูลนักเรียน "${st.display_name}" เรียบร้อยแล้ว`);
                                 } catch (err) {
+                                  soundEngine.playWrongSound();
                                   setError(
                                     err instanceof Error ? err.message : 'ลบข้อมูลนักเรียนไม่สำเร็จ'
                                   );
                                 }
                               }}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-red-100 hover:bg-red-200 text-red-700 border-2 border-red-600 font-extrabold text-xs"
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-red-100 hover:bg-red-200 text-red-700 border-2 border-red-600 font-extrabold text-xs cursor-pointer"
                               title="ลบนักเรียนออกจากทะเบียน"
                             >
                               <Trash2 className="w-3.5 h-3.5" /> ลบ
-                            </span>
+                            </button>
                           </div>
-                        </button>
+                        </div>
 
                         {/* Expanded Stage-by-Stage History for This Student */}
                         {isOpen && (
