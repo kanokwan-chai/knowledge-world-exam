@@ -19,6 +19,8 @@ import {
   Ban,
   Palette,
   Crosshair,
+  SkipForward,
+  PlusCircle,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { AvatarRenderer, BUILTIN_AVATAR_CATALOG } from '../components/avatar/AvatarRenderer';
@@ -147,6 +149,18 @@ export const StudentGamePlayPage: React.FC = () => {
   const [selectedTargetId, setSelectedTargetId] = useState<string>('');
   const [battleToast, setBattleToast] = useState<string | null>(null);
 
+  // Serious Exam: Speed Time Bank (saves leftover seconds from fast answers to redistribute to hard questions) & Skip-to-Revisit
+  const [savedBonusSeconds, setSavedBonusSeconds] = useState<number>(() => {
+    if (!roomId) return 0;
+    return Number(window.sessionStorage.getItem(`kw_timebank_${roomId}`) || '0') || 0;
+  });
+  const [fastAnsweredCount, setFastAnsweredCount] = useState<number>(() => {
+    if (!roomId) return 0;
+    return Number(window.sessionStorage.getItem(`kw_fastcnt_${roomId}`) || '0') || 0;
+  });
+  const [extraTimeNotice, setExtraTimeNotice] = useState<string | null>(null);
+  const skippedRealIndicesRef = useRef<Set<number>>(new Set());
+
   const broadcastRef = useRef<((event: RealtimeBroadcastEvent) => Promise<void>) | null>(null);
   const disqualifyingRef = useRef<boolean>(false);
   const advancingRef = useRef<boolean>(false);
@@ -267,6 +281,11 @@ export const StudentGamePlayPage: React.FC = () => {
 
       if (incomingRoom.status === 'lobby') {
         window.sessionStorage.removeItem(`kw_step_${incomingRoom.id}`);
+        window.sessionStorage.removeItem(`kw_timebank_${incomingRoom.id}`);
+        window.sessionStorage.removeItem(`kw_fastcnt_${incomingRoom.id}`);
+        skippedRealIndicesRef.current.clear();
+        setSavedBonusSeconds(0);
+        setFastAnsweredCount(0);
         if (
           !prevRoom ||
           prevRoom.status !== 'lobby' ||
@@ -886,6 +905,16 @@ export const StudentGamePlayPage: React.FC = () => {
       setSubmittedForQuestionId(questionPayload.question.id);
       setLastSubmitResult(res);
 
+      // Bank leftover seconds from fast answers into the Speed Time Bank (for redistributing to harder questions!)
+      if (serious && secondsLeft > 0) {
+        const nextBank = Math.min(180, savedBonusSeconds + secondsLeft);
+        const nextFastCnt = fastAnsweredCount + 1;
+        setSavedBonusSeconds(nextBank);
+        setFastAnsweredCount(nextFastCnt);
+        window.sessionStorage.setItem(`kw_timebank_${room.id}`, String(nextBank));
+        window.sessionStorage.setItem(`kw_fastcnt_${room.id}`, String(nextFastCnt));
+      }
+
       // Accumulate Coins & Total EXP into this student's persistent Identity Vault (kept across games for buying cosmetics!)
       if (res.is_correct && vaultProfile) {
         const reward = creditStudentGameReward(vaultProfile.identityKey, {
@@ -931,6 +960,60 @@ export const StudentGamePlayPage: React.FC = () => {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  // Request Extra Time using averaged leftover seconds banked from fast-answered questions
+  const handleRequestExtraTime = () => {
+    if (!room || !questionPayload || room.status !== 'question_active' || !room.question_ends_at) {
+      return;
+    }
+    if (savedBonusSeconds <= 0) {
+      setExtraTimeNotice('ยังไม่มีเวลาสะสม — ตอบข้อที่ทำได้ให้เร็วเพื่อเก็บเวลาไว้เติมให้ข้อที่คิดนานนะ!');
+      setTimeout(() => setExtraTimeNotice(null), 3000);
+      return;
+    }
+
+    // Average saved time from fast questions (clamped 5..30s per click, or all remaining if < 5s)
+    const avgFromFast = Math.round(savedBonusSeconds / Math.max(1, fastAnsweredCount));
+    const addSec = Math.min(savedBonusSeconds, Math.max(Math.min(savedBonusSeconds, 10), Math.min(30, avgFromFast)));
+    const nextBank = Math.max(0, savedBonusSeconds - addSec);
+    const currentEndMs = Math.max(Date.now(), new Date(room.question_ends_at).getTime());
+    const extendedEndsAt = new Date(currentEndMs + addSec * 1000).toISOString();
+
+    setSavedBonusSeconds(nextBank);
+    window.sessionStorage.setItem(`kw_timebank_${room.id}`, String(nextBank));
+    setRoom({ ...room, question_ends_at: extendedEndsAt });
+    soundEngine.playCoinSound();
+    setExtraTimeNotice(
+      `⏱️ ขอเวลาเพิ่มสำเร็จ! เติมเวลา +${addSec} วินาที จากค่าเฉลี่ยข้อที่ตอบเร็ว (เหลือเวลาสะสม ${nextBank}s)`
+    );
+    setTimeout(() => setExtraTimeNotice(null), 3500);
+  };
+
+  // Skip Question (in Serious Exam: queues skipped question to revisit at the end once; clicking skip again skips permanently)
+  const handleSkipQuestion = () => {
+    if (!room || !questionPayload || submitting || Boolean(hasSubmittedThisQ)) return;
+    soundEngine.playClickSound();
+
+    if (room.game_mode === 'serious_exam') {
+      const order = questionOrderRef.current;
+      const currentRealIdx = order[room.current_question_index];
+      if (currentRealIdx !== undefined && !skippedRealIndicesRef.current.has(currentRealIdx)) {
+        skippedRealIndicesRef.current.add(currentRealIdx);
+        questionOrderRef.current = [...order, currentRealIdx];
+        setExtraTimeNotice('⏭️ ข้ามข้อนี้ไว้ก่อนแล้ว — ระบบจะนำกลับมาให้ทำอีกครั้งตอนท้ายชุด!');
+        setTimeout(() => setExtraTimeNotice(null), 3000);
+      } else {
+        setExtraTimeNotice('⏭️ ข้ามข้อนี้แล้ว (+0 คะแนน) — กำลังไปข้อถัดไป...');
+        setTimeout(() => setExtraTimeNotice(null), 2500);
+      }
+      advanceToNextQuestionAuto(room);
+      return;
+    }
+
+    // Activity Mode: lock this question as skipped and wait for teacher
+    setSubmittedForQuestionId(questionPayload.question.id);
+    setExtraTimeNotice('⏭️ ข้ามข้อนี้แล้ว (+0 คะแนน) — รอคุณครูกดโชว์โพเดียม หรือเริ่มข้อถัดไป...');
   };
 
   const handleActivatePower = async (pw: PlayerPowerInstance) => {
@@ -1429,8 +1512,17 @@ export const StudentGamePlayPage: React.FC = () => {
             <div className="flex items-center gap-2">
               <span className="px-2.5 sm:px-3 py-1 rounded-full bg-kw-yellow border-2 border-slate-900 font-game font-extrabold text-xs">
                 ข้อที่ {room.current_question_index + 1}
-                {displayTotalQ > 0 ? ` / ${displayTotalQ}` : ''}
+                {displayTotalQ > 0 ? ` / ${Math.max(displayTotalQ, questionOrderRef.current.length)}` : ''}
               </span>
+              {isSeriousExam &&
+                questionOrderRef.current[room.current_question_index] !== undefined &&
+                skippedRealIndicesRef.current.has(
+                  questionOrderRef.current[room.current_question_index]
+                ) && (
+                  <span className="px-2 py-0.5 rounded-full bg-amber-200 border border-slate-900 text-slate-900 text-[10px] font-extrabold">
+                    🔄 ข้อที่ข้ามไว้ก่อนหน้า
+                  </span>
+                )}
               <span className="hidden sm:inline-block px-2.5 py-0.5 rounded-full bg-slate-200 text-slate-700 text-[11px] font-bold">
                 เวลาข้อนี้: {questionPayload.question.time_limit_seconds} วินาที
               </span>
@@ -1524,6 +1616,74 @@ export const StudentGamePlayPage: React.FC = () => {
                   </button>
                 );
               })}
+            </div>
+          )}
+
+          {/* Skip Question & Request Extra Time Bar (Uses averaged leftover seconds from fast answers!) */}
+          {!hasSubmittedThisQ && secondsLeft > 0 && (
+            <div className="relative z-10 flex flex-wrap items-center justify-between gap-2 pt-2 border-t-2 border-slate-200">
+              {isSeriousExam ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="px-2.5 py-1 rounded-xl bg-sky-100 border-2 border-slate-900 text-[11px] sm:text-xs font-extrabold text-slate-900">
+                    ⏳ เวลาสะสมจากข้อที่ตอบเร็ว: +{savedBonusSeconds} วิ
+                  </span>
+                  <button
+                    type="button"
+                    disabled={savedBonusSeconds <= 0}
+                    onClick={handleRequestExtraTime}
+                    className="px-3 py-1.5 rounded-xl bg-kw-green text-white border-2 border-slate-900 font-game font-extrabold text-xs inline-flex items-center gap-1.5 shadow-sm disabled:opacity-45"
+                    title="นำเวลาที่เหลือเฉลี่ยจากข้อที่ตอบเร็วมาเพิ่มให้ข้อนี้"
+                  >
+                    <PlusCircle className="w-4 h-4" />
+                    <span>
+                      ขอเวลาเพิ่ม (
+                      {savedBonusSeconds > 0
+                        ? `+${Math.min(
+                            savedBonusSeconds,
+                            Math.max(
+                              Math.min(savedBonusSeconds, 10),
+                              Math.min(
+                                30,
+                                Math.round(savedBonusSeconds / Math.max(1, fastAnsweredCount))
+                              )
+                            )
+                          )} วิ`
+                        : 'ยังไม่มีเวลาสะสม'}
+                      )
+                    </span>
+                  </button>
+                </div>
+              ) : (
+                <span className="text-[11px] font-bold text-slate-500">
+                  หากยังคิดไม่ออกสามารถกดข้ามข้อนี้ได้
+                </span>
+              )}
+
+              <button
+                type="button"
+                disabled={submitting}
+                onClick={handleSkipQuestion}
+                className="px-3.5 py-1.5 rounded-xl bg-slate-200 hover:bg-amber-100 text-slate-900 border-2 border-slate-900 font-game font-extrabold text-xs inline-flex items-center gap-1.5"
+              >
+                <SkipForward className="w-4 h-4" />
+                <span>
+                  {isSeriousExam &&
+                  questionOrderRef.current[room.current_question_index] !== undefined &&
+                  skippedRealIndicesRef.current.has(
+                    questionOrderRef.current[room.current_question_index]
+                  )
+                    ? 'ข้ามเลย (ไม่ตอบข้อนี้)'
+                    : isSeriousExam
+                      ? 'ข้ามข้อนี้ก่อน (กลับมาทำทีหลัง)'
+                      : 'ข้ามข้อนี้'}
+                </span>
+              </button>
+            </div>
+          )}
+
+          {extraTimeNotice && (
+            <div className="relative z-10 p-2.5 rounded-xl bg-sky-100 border-2 border-sky-700 text-sky-950 text-xs font-extrabold text-center">
+              {extraTimeNotice}
             </div>
           )}
 
