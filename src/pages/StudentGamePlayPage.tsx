@@ -179,15 +179,20 @@ export const StudentGamePlayPage: React.FC = () => {
     };
   }, []);
 
-  // Build deterministic unique shuffled question order for this student in this room
+  // Build question order:
+  // - Serious Exam: deterministic per-student shuffled order (different questions simultaneously)
+  // - Activity Mode: exact same sequential order as Teacher Host (0..N-1) so everyone shares the same question & Podium!
   const ensureQuestionOrder = useCallback(async (targetRoom: GameRoom, partId: string): Promise<number[]> => {
-    const seed = `${targetRoom.id}_${partId}`;
+    const seed = `${targetRoom.id}_${partId}_${targetRoom.game_mode}`;
     if (questionOrderRef.current.length > 0 && questionOrderSeedRef.current === seed) {
       return questionOrderRef.current;
     }
     const count = await fetchQuizQuestionCount(targetRoom.quiz_id).catch(() => 0);
     const safeCount = Math.max(1, count);
-    const order = buildShuffledQuestionOrder(safeCount, seed);
+    const order =
+      targetRoom.game_mode === 'serious_exam'
+        ? buildShuffledQuestionOrder(safeCount, seed)
+        : Array.from({ length: safeCount }, (_, i) => i);
     questionOrderRef.current = order;
     questionOrderSeedRef.current = seed;
     setTotalQuestions(safeCount);
@@ -825,14 +830,17 @@ export const StudentGamePlayPage: React.FC = () => {
     return () => clearInterval(interval);
   }, [room, advanceToNextQuestionAuto]);
 
-  // Shuffle choices uniquely for this student so sitting next to each other cannot copy option positions
+  // Shuffle choices uniquely per student in Serious Exam mode; keep exact teacher order in Activity Mode!
   const shuffledChoices = useMemo(() => {
     if (!questionPayload?.choices || !participant) return [];
+    if (room?.game_mode !== 'serious_exam') {
+      return questionPayload.choices;
+    }
     return shuffleChoicesForStudent(
       questionPayload.choices,
       `${participant.id}_${questionPayload.question.id}`
     );
-  }, [questionPayload?.choices, questionPayload?.question.id, participant?.id]);
+  }, [questionPayload?.choices, questionPayload?.question.id, participant?.id, room?.game_mode]);
 
   const handleEnterFullscreenExamMode = async () => {
     try {
@@ -1344,20 +1352,27 @@ export const StudentGamePlayPage: React.FC = () => {
                 : 'กติกาโหมดกิจกรรมเก็บคะแนนสั้นๆ:'}
             </div>
             <ul className="list-disc list-inside space-y-1">
-              <li>
-                <strong>สุ่มสลับข้อสอบและตัวเลือกรายคน:</strong> ในเวลาเดียวกันคุณจะได้ทำคนละข้อกับเพื่อนข้างๆ
-              </li>
-              <li>
-                <strong>หมดเวลาไปข้อถัดไปอัตโนมัติ:</strong> หากหมดเวลาแล้วยังไม่ตอบ จะได้ 0 คะแนนในข้อนั้นและไปข้อถัดไปทันที
-              </li>
               {isSeriousExam ? (
-                <li>
-                  <strong>โหมดสอบจริงไม่เฉลยคำตอบ:</strong> นับเฉพาะคะแนนสอบจริง (1 คะแนน/ข้อ) ไม่มีการโจมตีเพื่อน
-                </li>
+                <>
+                  <li>
+                    <strong>สุ่มสลับข้อสอบและตัวเลือกรายคน:</strong> ในเวลาเดียวกันคุณจะได้ทำคนละข้อกับเพื่อนข้างๆ
+                  </li>
+                  <li>
+                    <strong>หมดเวลาไปข้อถัดไปอัตโนมัติ:</strong> หากหมดเวลาแล้วยังไม่ตอบ จะได้ 0 คะแนนในข้อนั้นและไปข้อถัดไปทันที
+                  </li>
+                  <li>
+                    <strong>โหมดสอบจริงไม่เฉลยคำตอบรายข้อ:</strong> นับเฉพาะคะแนนสอบจริง (1 คะแนน/ข้อ) และทราบคะแนนรวมทันทีเมื่อทำครบทุกข้อ
+                  </li>
+                </>
               ) : (
-                <li>
-                  <strong>โหมดกิจกรรมสนุกสุดมันส์:</strong> มีโพเดียมหลังตอบแต่ละข้อ และเลือกเพื่อนโจมตีแต้มเกมได้ (ไม่ลดคะแนนสอบจริง)
-                </li>
+                <>
+                  <li>
+                    <strong>ข้อสอบตรงกันทั้งห้องพร้อมหน้าจอคุณครู:</strong> ทุกคนทำข้อเดียวกันพร้อมกัน และรอคุณครูกดโชว์โพเดียมหรือกดเริ่มข้อถัดไป
+                  </li>
+                  <li>
+                    <strong>โหมดกิจกรรมสนุกสุดมันส์:</strong> มีโพเดียม Top 3 และเลือกเพื่อนโจมตีแต้มเกมได้ (ไม่ลดคะแนนสอบจริง) พร้อมรับเหรียญสะสมแต่งตัวละคร!
+                  </li>
+                </>
               )}
               <li className="text-red-700">
                 <strong>ห้ามสลับแท็บ / ห้ามย่อหน้าจอ / ห้ามเปิด AI:</strong> ระบบตรวจจับการทุจริตทำงานตลอดเวลา!
