@@ -154,3 +154,102 @@ GRANT EXECUTE ON FUNCTION public.get_student_identity_cloud(TEXT) TO anon, authe
 GRANT EXECUTE ON FUNCTION public.upsert_student_identity_cloud(
   TEXT, TEXT, TEXT, TEXT, JSONB, INTEGER, INTEGER, INTEGER, INTEGER, TEXT[], INTEGER, TEXT[]
 ) TO anon, authenticated;
+
+
+-- ============================================================================
+-- TEACHER STUDENT MANAGEMENT: DELETE PARTICIPANTS & STUDENT RECORDS
+-- ============================================================================
+
+DROP POLICY IF EXISTS "Teachers can delete student identities" ON public.student_identities;
+CREATE POLICY "Teachers can delete student identities"
+  ON public.student_identities
+  FOR DELETE
+  TO authenticated
+  USING (true);
+
+GRANT DELETE ON public.student_identities TO authenticated;
+
+DROP POLICY IF EXISTS "Host teacher can delete participants in own rooms" ON public.game_participants;
+CREATE POLICY "Host teacher can delete participants in own rooms"
+  ON public.game_participants
+  FOR DELETE
+  TO authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.game_rooms r
+      WHERE r.id = game_participants.room_id AND r.host_teacher_id = auth.uid()
+    )
+  );
+
+GRANT DELETE ON public.game_participants TO authenticated;
+
+-- RPC: Delete a single participant from a teacher's live exam room (Lobby / Active)
+CREATE OR REPLACE FUNCTION public.teacher_delete_room_participant(
+  p_room_id UUID,
+  p_participant_id UUID
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_room public.game_rooms;
+BEGIN
+  SELECT * INTO v_room FROM public.game_rooms WHERE id = p_room_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'ไม่พบห้องสอบนี้';
+  END IF;
+  IF v_room.host_teacher_id <> auth.uid() THEN
+    RAISE EXCEPTION 'เฉพาะคุณครูเจ้าของห้องเท่านั้นที่สามารถลบนักเรียนออกจากห้องได้';
+  END IF;
+
+  DELETE FROM public.game_participants
+  WHERE id = p_participant_id AND room_id = p_room_id;
+
+  RETURN true;
+END;
+$$;
+
+-- RPC: Delete all records for a student (across teacher's rooms + cloud identity vault)
+CREATE OR REPLACE FUNCTION public.teacher_delete_student_records(
+  p_identity_key TEXT,
+  p_display_name TEXT
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_deleted INTEGER := 0;
+  v_clean_key TEXT := lower(trim(COALESCE(p_identity_key, '')));
+  v_clean_name TEXT := lower(trim(COALESCE(p_display_name, '')));
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'กรุณาเข้าสู่ระบบบัญชีคุณครูก่อนลบข้อมูลนักเรียน';
+  END IF;
+
+  -- Delete participant records in all rooms hosted by this teacher
+  DELETE FROM public.game_participants gp
+  USING public.game_rooms r
+  WHERE gp.room_id = r.id
+    AND r.host_teacher_id = auth.uid()
+    AND (
+      lower(trim(gp.nickname)) = v_clean_name
+      OR lower(regexp_replace(trim(gp.nickname), '\s*\(#(\d{3})\)$', '#\1')) = v_clean_key
+    );
+
+  GET DIAGNOSTICS v_deleted = ROW_COUNT;
+
+  -- Also remove from cloud student_identities vault if present
+  DELETE FROM public.student_identities
+  WHERE identity_key = v_clean_key
+     OR lower(trim(display_identity)) = v_clean_name;
+
+  RETURN v_deleted;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.teacher_delete_room_participant(UUID, UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.teacher_delete_student_records(TEXT, TEXT) TO authenticated;

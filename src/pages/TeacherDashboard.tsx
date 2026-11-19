@@ -76,6 +76,7 @@ import {
   createQuiz,
   deleteQuestion,
   deleteQuiz,
+  deleteStudentFromDirectory,
   duplicateQuiz,
   exportDetailedRoomReportCSV,
   exportDetailedRoomReportExcel,
@@ -88,6 +89,7 @@ import {
   fetchTeacherGameHistory,
   fetchTeacherQuizzes,
   fetchTeacherStudentDirectory,
+  removeStudentFromClassroom,
   saveQuestionWithChoices,
   swapQuestionSortOrder,
   TeacherStudentActivitySummary,
@@ -2031,37 +2033,35 @@ export const TeacherDashboard: React.FC = () => {
               </p>
             </div>
 
-            {!cloudVaultReady && (
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={async () => {
-                    await navigator.clipboard.writeText(studentCloudSql);
-                    setCopiedCloudSql(true);
-                    soundEngine.playCoinSound();
-                    setTimeout(() => setCopiedCloudSql(false), 3500);
-                  }}
-                  className="btn-game-yellow text-xs py-2 px-4"
-                >
-                  {copiedCloudSql
-                    ? '✅ คัดลอก SQL แล้ว! วางใน Supabase SQL Editor แล้วกด RUN'
-                    : '📋 คัดลอก SQL เปิดระบบจำตัวละครข้ามเครื่อง'}
-                </button>
-                {(() => {
-                  const ref = getSupabaseProjectRef();
-                  return ref ? (
-                    <a
-                      href={`https://supabase.com/dashboard/project/${ref}/sql/new`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="px-3.5 py-2 rounded-xl bg-kw-blue text-white border-2 border-slate-900 font-bold text-xs"
-                    >
-                      เปิด Supabase SQL Editor ↗
-                    </a>
-                  ) : null;
-                })()}
-              </div>
-            )}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={async () => {
+                  await navigator.clipboard.writeText(studentCloudSql);
+                  setCopiedCloudSql(true);
+                  soundEngine.playCoinSound();
+                  setTimeout(() => setCopiedCloudSql(false), 3500);
+                }}
+                className="btn-game-yellow text-xs py-2 px-4"
+              >
+                {copiedCloudSql
+                  ? '✅ คัดลอก SQL แล้ว! วางใน Supabase SQL Editor แล้วกด RUN'
+                  : '📋 คัดลอก SQL (จำตัวละครข้ามเครื่อง + ลบนักเรียน)'}
+              </button>
+              {(() => {
+                const ref = getSupabaseProjectRef();
+                return ref ? (
+                  <a
+                    href={`https://supabase.com/dashboard/project/${ref}/sql/new`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="px-3.5 py-2 rounded-xl bg-kw-blue text-white border-2 border-slate-900 font-bold text-xs"
+                  >
+                    เปิด Supabase SQL Editor ↗
+                  </a>
+                ) : null;
+              })()}
+            </div>
           </div>
 
           <div className="card-game p-5 sm:p-6 space-y-4">
@@ -2178,6 +2178,37 @@ export const TeacherDashboard: React.FC = () => {
                                 dateStyle: 'short',
                                 timeStyle: 'short',
                               })}
+                            </span>
+                            <span
+                              role="button"
+                              tabIndex={0}
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                if (
+                                  !window.confirm(
+                                    `ยืนยันลบข้อมูลนักเรียน "${st.display_name}" ออกจากระบบทั้งหมดใช่หรือไม่?`
+                                  )
+                                ) {
+                                  return;
+                                }
+                                try {
+                                  setError(null);
+                                  await deleteStudentFromDirectory(st.identity_key, st.display_name);
+                                  setStudentDirectory((prev) =>
+                                    prev.filter((item) => item.identity_key !== st.identity_key)
+                                  );
+                                  soundEngine.playClickSound();
+                                  setSaveSuccess(`✅ ลบข้อมูลนักเรียน "${st.display_name}" เรียบร้อยแล้ว`);
+                                } catch (err) {
+                                  setError(
+                                    err instanceof Error ? err.message : 'ลบข้อมูลนักเรียนไม่สำเร็จ'
+                                  );
+                                }
+                              }}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-red-100 hover:bg-red-200 text-red-700 border-2 border-red-600 font-extrabold text-xs"
+                              title="ลบนักเรียนออกจากทะเบียน"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" /> ลบ
                             </span>
                           </div>
                         </button>
@@ -2378,8 +2409,30 @@ export const TeacherDashboard: React.FC = () => {
                           <span className="font-bold">{cs.profiles?.display_name || 'Student'}</span>
                           <span className="text-xs text-slate-500 ml-2">{cs.profiles?.email}</span>
                         </div>
-                        <div className="text-xs font-bold">
-                          Lv.{cs.profiles?.level ?? 1} | {cs.profiles?.total_score ?? 0} pts
+                        <div className="flex items-center gap-3">
+                          <div className="text-xs font-bold">
+                            Lv.{cs.profiles?.level ?? 1} | {cs.profiles?.total_score ?? 0} pts
+                          </div>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const stuName = cs.profiles?.display_name || 'นักเรียนคนนี้';
+                              if (!window.confirm(`ยืนยันลบ "${stuName}" ออกจากห้องเรียนนี้ใช่หรือไม่?`)) {
+                                return;
+                              }
+                              try {
+                                await removeStudentFromClassroom(cs.id);
+                                setClassroomStudents((prev) => prev.filter((item) => item.id !== cs.id));
+                                soundEngine.playClickSound();
+                              } catch (err) {
+                                setError(err instanceof Error ? err.message : 'ลบนักเรียนออกจากห้องเรียนไม่สำเร็จ');
+                              }
+                            }}
+                            className="p-1.5 rounded-lg bg-red-100 hover:bg-red-200 text-red-700 border border-red-500"
+                            title="ลบนักเรียนออกจากห้องเรียน"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                         </div>
                       </div>
                     ))

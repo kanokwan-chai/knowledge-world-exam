@@ -1664,3 +1664,51 @@ export async function fetchTeacherStudentDirectory(teacherId: string): Promise<{
 
   return { students, cloudTableReady };
 }
+
+
+export async function removeStudentFromClassroom(classroomStudentId: string): Promise<void> {
+  const { error } = await supabase
+    .from('classroom_students')
+    .delete()
+    .eq('id', classroomStudentId);
+
+  if (error) throw new Error(error.message);
+}
+
+export async function deleteRoomParticipant(roomId: string, participantId: string): Promise<void> {
+  const { error: rpcErr } = await supabase.rpc('teacher_delete_room_participant', {
+    p_room_id: roomId,
+    p_participant_id: participantId,
+  });
+
+  if (!rpcErr) return;
+
+  // Fallback to direct delete if policy exists without RPC
+  const { error: delErr } = await supabase
+    .from('game_participants')
+    .delete()
+    .eq('id', participantId)
+    .eq('room_id', roomId);
+
+  if (delErr) {
+    throw new Error(
+      'กรุณากดปุ่ม "คัดลอก SQL เปิดระบบจำตัวละครข้ามเครื่อง & ลบนักเรียน" ในแท็บ ข้อมูลนักเรียนรายคน ไปรันใน Supabase SQL Editor 1 ครั้งก่อนลบนักเรียนครับ'
+    );
+  }
+}
+
+export async function deleteStudentFromDirectory(
+  identityKey: string,
+  displayName: string
+): Promise<void> {
+  const { error: rpcErr } = await supabase.rpc('teacher_delete_student_records', {
+    p_identity_key: identityKey,
+    p_display_name: displayName,
+  });
+
+  if (!rpcErr) return;
+
+  throw new Error(
+    'กรุณากดปุ่ม "คัดลอก SQL เปิดระบบจำตัวละครข้ามเครื่อง & ลบนักเรียน" ด้านบนไปรันใน Supabase SQL Editor 1 ครั้งก่อนลบข้อมูลนักเรียนครับ'
+  );
+}

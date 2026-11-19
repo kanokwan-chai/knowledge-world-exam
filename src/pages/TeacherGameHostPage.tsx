@@ -22,6 +22,7 @@ import {
   KeyRound,
   RefreshCw,
   FileSpreadsheet,
+  Trash2,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { AvatarRenderer } from '../components/avatar/AvatarRenderer';
@@ -30,6 +31,7 @@ import { generateRandomExamPin, isTeacherGateUnlocked } from '../lib/securityGua
 import {
   advanceGameQuestionRPC,
   createGameRoomRPC,
+  deleteRoomParticipant,
   exportDetailedRoomReportCSV,
   exportDetailedRoomReportExcel,
   exportScoresToCSV,
@@ -764,8 +766,27 @@ export const TeacherGameHostPage: React.FC = () => {
                       key={p.id}
                       initial={{ scale: 0.8, opacity: 0 }}
                       animate={{ scale: 1, opacity: 1 }}
-                      className="p-3 rounded-2xl bg-white border-3 border-slate-900 shadow-sm flex flex-col items-center text-center space-y-1.5"
+                      className="relative p-3 rounded-2xl bg-white border-3 border-slate-900 shadow-sm flex flex-col items-center text-center space-y-1.5"
                     >
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (!window.confirm(`ยืนยันลบ "${p.nickname}" ออกจากห้องสอบนี้ใช่หรือไม่?`)) {
+                            return;
+                          }
+                          try {
+                            await deleteRoomParticipant(room.id, p.id);
+                            setParticipants((prev) => prev.filter((item) => item.id !== p.id));
+                            soundEngine.playClickSound();
+                          } catch (err) {
+                            setError(err instanceof Error ? err.message : 'ลบนักเรียนไม่สำเร็จ');
+                          }
+                        }}
+                        className="absolute top-1.5 right-1.5 p-1 rounded-lg bg-red-100 hover:bg-red-200 text-red-700 border border-red-400"
+                        title="ลบนักเรียนออกจากห้องนี้"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
                       <AvatarRenderer config={p.avatar_config} size="sm" animate={false} />
                       <div className="font-bold text-sm truncate w-full">{p.nickname}</div>
                       <span
