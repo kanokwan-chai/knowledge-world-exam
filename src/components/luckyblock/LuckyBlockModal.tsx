@@ -1,10 +1,17 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Sparkles, Coins, Star, Gift, AlertCircle } from 'lucide-react';
+import { Sparkles, Coins, Star, Gift, AlertCircle, Ticket } from 'lucide-react';
 import { rollLuckyBlockRPC } from '../../services/gameEngineService';
 import { ItemRarity, LuckyBlockRollResult } from '../../types/database';
 import { useAuth } from '../../context/AuthContext';
 import { soundEngine } from '../../lib/soundEngine';
+import { BUILTIN_AVATAR_CATALOG } from '../avatar/AvatarRenderer';
+import {
+  creditStudentGameReward,
+  getActiveStudentVaultProfile,
+  spendForLuckyBlockSpin,
+  unlockStudentVaultItemFree,
+} from '../../lib/studentIdentityVault';
 
 const RARITY_STYLES: Record<ItemRarity, { badge: string; border: string; label: string }> = {
   common: { badge: 'bg-slate-200 text-slate-900', border: 'border-slate-500', label: 'COMMON (45%)' },
@@ -13,6 +20,15 @@ const RARITY_STYLES: Record<ItemRarity, { badge: string; border: string; label: 
   epic: { badge: 'bg-purple-200 text-purple-950', border: 'border-purple-600', label: 'EPIC (8%)' },
   legendary: { badge: 'bg-amber-300 text-amber-950', border: 'border-amber-500', label: 'LEGENDARY (3%)' },
 };
+
+function pickWeightedRarity(): ItemRarity {
+  const r = Math.random() * 100;
+  if (r < 3) return 'legendary';
+  if (r < 11) return 'epic';
+  if (r < 27) return 'rare';
+  if (r < 55) return 'uncommon';
+  return 'common';
+}
 
 interface LuckyBlockModalProps {
   roomId?: string;
@@ -25,6 +41,9 @@ export const LuckyBlockCard: React.FC<LuckyBlockModalProps> = ({ roomId, onRewar
   const [result, setResult] = useState<LuckyBlockRollResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [claimToken, setClaimToken] = useState<string>(() => `lb_${crypto.randomUUID()}`);
+  const [vaultSnapshot, setVaultSnapshot] = useState(() => getActiveStudentVaultProfile());
+
+  const canSpin = Boolean(user || vaultSnapshot);
 
   const handleOpenLuckyBlock = async () => {
     if (isRolling) return;
@@ -33,10 +52,100 @@ export const LuckyBlockCard: React.FC<LuckyBlockModalProps> = ({ roomId, onRewar
     setIsRolling(true);
 
     try {
-      const rollData = await rollLuckyBlockRPC(claimToken, roomId);
+      // Path A: Logged-in Supabase Student
+      if (user) {
+        const rollData = await rollLuckyBlockRPC(claimToken, roomId);
+        soundEngine.playLuckyBlockSound();
+        setResult(rollData);
+        await refreshProfile();
+        onRewardClaimed?.(rollData);
+        return;
+      }
+
+      // Path B: Student Identity Vault (Real Name + Last 3 Digits)
+      const activeVault = getActiveStudentVaultProfile();
+      if (!activeVault) {
+        setError('กรุณาใส่ชื่อจริงและเลข 3 ตัวหลังที่หน้าแรกก่อนเปิดกล่องสุ่มรางวัล');
+        return;
+      }
+
+      const spent = spendForLuckyBlockSpin(activeVault.identityKey, 120);
+      if (!spent.ok || !spent.profile) {
+        soundEngine.playWrongSound();
+        setError(spent.error || 'เหรียญหรือตั๋วสุ่มไม่พอ');
+        return;
+      }
+
+      await new Promise((r) => setTimeout(r, 550));
+
+      const rarity = pickWeightedRarity();
+      const lockedPool = BUILTIN_AVATAR_CATALOG.filter(
+        (it) => !it.is_starter && !spent.profile!.ownedItemCodes.includes(it.code)
+      );
+      const rarityPool = lockedPool.filter((it) => it.rarity === rarity);
+      const chosenItem =
+        rarityPool.length > 0
+          ? rarityPool[Math.floor(Math.random() * rarityPool.length)]
+          : lockedPool.length > 0 && Math.random() < 0.65
+            ? lockedPool[Math.floor(Math.random() * lockedPool.length)]
+            : null;
+
+      let rollData: LuckyBlockRollResult;
+
+      if (chosenItem) {
+        const unlockedProfile = unlockStudentVaultItemFree(activeVault.identityKey, chosenItem.code);
+        const bonusExp = rarity === 'legendary' ? 200 : rarity === 'epic' ? 120 : 60;
+        const credited = creditStudentGameReward(activeVault.identityKey, {
+          dedupeKey: `lb_item_${claimToken}`,
+          coins: 0,
+          exp: bonusExp,
+        });
+        setVaultSnapshot(credited.profile || unlockedProfile);
+        rollData = {
+          reward_id: chosenItem.id,
+          name: `ปลดล็อกไอเทมใหม่: ${chosenItem.name}!`,
+          rarity: chosenItem.rarity,
+          reward_type: 'avatar_item',
+          coin_amount: 0,
+          exp_amount: bonusExp,
+          item_id: chosenItem.id,
+        };
+      } else {
+        const coinPrizeMap: Record<ItemRarity, number> = {
+          common: 80,
+          uncommon: 150,
+          rare: 240,
+          epic: 360,
+          legendary: 600,
+        };
+        const expPrizeMap: Record<ItemRarity, number> = {
+          common: 40,
+          uncommon: 80,
+          rare: 140,
+          epic: 220,
+          legendary: 350,
+        };
+        const coinsWon = coinPrizeMap[rarity];
+        const expWon = expPrizeMap[rarity];
+        const credited = creditStudentGameReward(activeVault.identityKey, {
+          dedupeKey: `lb_coin_${claimToken}`,
+          coins: coinsWon,
+          exp: expWon,
+        });
+        setVaultSnapshot(credited.profile);
+        rollData = {
+          reward_id: `coin_${Date.now()}`,
+          name: `ถุงเหรียญนำโชค (+${coinsWon} เหรียญ!)`,
+          rarity,
+          reward_type: 'coins',
+          coin_amount: coinsWon,
+          exp_amount: expWon,
+          item_id: null,
+        };
+      }
+
       soundEngine.playLuckyBlockSound();
       setResult(rollData);
-      await refreshProfile();
       onRewardClaimed?.(rollData);
     } catch (err) {
       soundEngine.playWrongSound();
@@ -50,22 +159,34 @@ export const LuckyBlockCard: React.FC<LuckyBlockModalProps> = ({ roomId, onRewar
     setResult(null);
     setError(null);
     setClaimToken(`lb_${crypto.randomUUID()}`);
+    setVaultSnapshot(getActiveStudentVaultProfile());
   };
 
   return (
     <div className="card-game p-4 sm:p-6 relative overflow-hidden">
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
         <div>
           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-kw-yellow border-2 border-slate-900 text-xs font-extrabold">
             <Sparkles className="w-3.5 h-3.5" /> LUCKY QUESTION BLOCK
           </span>
           <h3 className="font-game text-2xl font-bold mt-1">
-            กล่องสุ่มรางวัลแห่งการเรียนรู้
+            กล่องสุ่มของแต่งตัวละคร &amp; เหรียญรางวัล
           </h3>
           <p className="text-xs text-slate-600">
-            สุ่มด้วยระบบ Server-side PostgreSQL RPC ปลอดภัย 100% (ไม่ใช้เงินจริง)
+            ใช้ตั๋วสุ่มฟรี (ได้เมื่อเล่นจบเกม) หรือ 120 เหรียญ เพื่อสุ่มปลดล็อกทรงผม ชุด และเครื่องประดับหายาก!
           </p>
         </div>
+
+        {vaultSnapshot && !user && (
+          <div className="flex items-center gap-2 text-xs font-extrabold">
+            <span className="px-2.5 py-1 rounded-xl bg-amber-100 border-2 border-slate-900 inline-flex items-center gap-1">
+              <Ticket className="w-3.5 h-3.5 text-kw-red" /> ตั๋วฟรี: {vaultSnapshot.luckyTickets}
+            </span>
+            <span className="px-2.5 py-1 rounded-xl bg-kw-yellow border-2 border-slate-900 inline-flex items-center gap-1">
+              <Coins className="w-3.5 h-3.5 text-amber-800" /> {vaultSnapshot.walletCoins.toLocaleString()}
+            </span>
+          </div>
+        )}
       </div>
 
       <div className="flex flex-col items-center justify-center py-6 bg-gradient-to-b from-sky-100 to-amber-50 rounded-2xl border-4 border-slate-900">
@@ -74,7 +195,7 @@ export const LuckyBlockCard: React.FC<LuckyBlockModalProps> = ({ roomId, onRewar
             <motion.button
               key="block-closed"
               type="button"
-              disabled={isRolling || !user}
+              disabled={isRolling || !canSpin}
               onClick={handleOpenLuckyBlock}
               whileHover={{ scale: 1.06 }}
               whileTap={{ scale: 0.92, y: -12 }}
@@ -115,7 +236,7 @@ export const LuckyBlockCard: React.FC<LuckyBlockModalProps> = ({ roomId, onRewar
               </span>
 
               <div className="font-game text-2xl font-extrabold text-slate-900 flex items-center justify-center gap-2">
-                <Gift className="w-7 h-7 text-kw-red" />
+                <Gift className="w-7 h-7 text-kw-red shrink-0" />
                 <span>{result.name}</span>
               </div>
 
@@ -137,19 +258,21 @@ export const LuckyBlockCard: React.FC<LuckyBlockModalProps> = ({ roomId, onRewar
                 onClick={handleResetForNextBlock}
                 className="btn-game-green text-sm py-2 px-5 mt-2"
               >
-                เตรียมกล่องสุ่มถัดไป
+                สุ่มกล่องถัดไป!
               </button>
             </motion.div>
           )}
         </AnimatePresence>
 
         {!result && (
-          <p className="mt-4 text-sm font-bold text-slate-800">
+          <p className="mt-4 text-sm font-bold text-slate-800 text-center px-3">
             {isRolling
-              ? 'กำลังสุ่มรางวัลจาก Server...'
-              : user
-                ? 'คลิกที่บล็อกคำถาม (?) เพื่อกระโดดโหม่งเปิดรางวัล!'
-                : 'เข้าสู่ระบบนักเรียนเพื่อเปิดกล่องสุ่มและสะสมไอเทม'}
+              ? 'กำลังสุ่มรางวัล...'
+              : canSpin
+                ? vaultSnapshot && vaultSnapshot.luckyTickets > 0
+                  ? 'คลิกที่บล็อกคำถาม (?) เพื่อใช้ตั๋วสุ่มฟรี 1 ใบ!'
+                  : 'คลิกที่บล็อกคำถาม (?) เพื่อสุ่มรางวัล (120 เหรียญ)!'
+                : 'ใส่ชื่อจริงและเลข 3 ตัวหลังที่หน้าแรกก่อน เพื่อเปิดกล่องสุ่มและสะสมของแต่งตัวละคร'}
           </p>
         )}
       </div>

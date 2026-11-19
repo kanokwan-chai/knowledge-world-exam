@@ -37,6 +37,14 @@ import {
   ScoreRecord,
 } from '../types/database';
 import { soundEngine } from '../lib/soundEngine';
+import { formatStudentExamIdentity } from '../lib/securityGuard';
+import {
+  ensureStudentVaultProfile,
+  getActiveStudentVaultProfile,
+  purchaseStudentVaultItem,
+  saveStudentVaultAvatar,
+  StudentVaultProfile,
+} from '../lib/studentIdentityVault';
 
 const SLOT_PROP_MAP: Record<AvatarSlot, keyof AvatarConfig> = {
   gender: 'gender',
@@ -67,9 +75,41 @@ export const StudentDashboard: React.FC = () => {
   const [globalLeaders, setGlobalLeaders] = useState<Profile[]>([]);
   const [scoreHistory, setScoreHistory] = useState<ScoreRecord[]>([]);
   const [customAvatarName, setCustomAvatarName] = useState(avatarName);
+  const [vaultProfile, setVaultProfile] = useState<StudentVaultProfile | null>(() =>
+    getActiveStudentVaultProfile()
+  );
+  const [idNameInput, setIdNameInput] = useState(() => getActiveStudentVaultProfile()?.realName || '');
+  const [idLast3Input, setIdLast3Input] = useState(
+    () => getActiveStudentVaultProfile()?.last3Digits || ''
+  );
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  const handleLoadOrSwitchStudentVault = (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    const check = formatStudentExamIdentity(idNameInput, idLast3Input);
+    if (!check.valid) {
+      soundEngine.playWrongSound();
+      setError(check.error || 'กรุณากรอกชื่อจริงและเลข 3 ตัวหลังรหัสนักเรียน');
+      return;
+    }
+    const loaded = ensureStudentVaultProfile(idNameInput.trim(), idLast3Input.trim(), avatarConfig);
+    setVaultProfile(loaded);
+    setCustomAvatarName(loaded.displayIdentity);
+    setLocalAvatarConfig(loaded.avatarConfig, loaded.displayIdentity);
+    try {
+      window.localStorage.setItem('kw_student_real_name', idNameInput.trim());
+      window.localStorage.setItem('kw_student_id_last3', idLast3Input.trim());
+    } catch {
+      // ignore
+    }
+    soundEngine.playPowerUpSound();
+    setNotice(
+      `โหลดโปรไฟล์ "${loaded.displayIdentity}" เรียบร้อย! (เหรียญสะสม: ${loaded.walletCoins.toLocaleString()} • Lv.${loaded.level})`
+    );
+  };
 
   const loadStudentHub = useCallback(async () => {
     try {
@@ -111,6 +151,7 @@ export const StudentDashboard: React.FC = () => {
 
   const ownedItemCodes = new Set<string>([
     ...BUILTIN_AVATAR_CATALOG.filter((i) => i.is_starter).map((i) => i.code),
+    ...(vaultProfile?.ownedItemCodes || []),
     ...inventory.map((inv) => inv.avatar_items?.code || '').filter(Boolean),
   ]);
 
@@ -152,6 +193,10 @@ export const StudentDashboard: React.FC = () => {
       }
 
       setLocalAvatarConfig(nextConfig, customAvatarName);
+      if (vaultProfile) {
+        const updatedVault = saveStudentVaultAvatar(vaultProfile.identityKey, nextConfig);
+        if (updatedVault) setVaultProfile(updatedVault);
+      }
       if (user) {
         await savePlayerAvatarCustomization(user.id, customAvatarName, nextConfig).catch(() => null);
       }
@@ -159,9 +204,27 @@ export const StudentDashboard: React.FC = () => {
       return;
     }
 
+    // Buy locked item using Student Identity Vault coins (no email account required!)
     if (!user) {
-      soundEngine.playWrongSound();
-      setError('กรุณาเข้าสู่ระบบบัญชีนักเรียนเพื่อใช้เหรียญปลดล็อกไอเทมพิเศษในร้านค้า');
+      if (!vaultProfile) {
+        soundEngine.playWrongSound();
+        setError('กรุณากรอก "ชื่อจริง + เลข 3 ตัวหลังรหัสนักเรียน" ด้านบนก่อน เพื่อใช้เหรียญสะสมซื้อของแต่งตัวละคร');
+        return;
+      }
+      const bought = purchaseStudentVaultItem(vaultProfile.identityKey, item.code, item.price_coins);
+      if (!bought.ok || !bought.profile) {
+        soundEngine.playWrongSound();
+        setError(bought.error || 'เหรียญสะสมไม่พอสำหรับซื้อไอเทมนี้');
+        return;
+      }
+      soundEngine.playPowerUpSound();
+      const nextConfig: AvatarConfig = { ...avatarConfig, [propKey]: item.code };
+      setLocalAvatarConfig(nextConfig, bought.profile.displayIdentity);
+      const saved = saveStudentVaultAvatar(bought.profile.identityKey, nextConfig);
+      setVaultProfile(saved || bought.profile);
+      setNotice(
+        `ซื้อและสวมใส่ "${item.name}" สำเร็จ! (เหลือ ${bought.profile.walletCoins.toLocaleString()} เหรียญ)`
+      );
       return;
     }
 
@@ -210,8 +273,12 @@ export const StudentDashboard: React.FC = () => {
     setError(null);
     setNotice(null);
     setLocalAvatarConfig(avatarConfig, customAvatarName);
+    if (vaultProfile) {
+      const saved = saveStudentVaultAvatar(vaultProfile.identityKey, avatarConfig);
+      if (saved) setVaultProfile(saved);
+    }
     if (!user) {
-      setNotice('บันทึก Avatar สำหรับเข้าเล่นเกมบนอุปกรณ์นี้เรียบร้อยแล้ว!');
+      setNotice('บันทึกตัวละครเดิมของคุณเรียบร้อยแล้ว! (กลับมาเล่นครั้งหน้าใส่ชื่อจริง + เลข 3 ตัวหลัง ตัวละครเดิมจะโหลดให้อัตโนมัติ)');
       return;
     }
     setBusy(true);
@@ -225,10 +292,16 @@ export const StudentDashboard: React.FC = () => {
     }
   };
 
-  const currentLevel = profile?.level ?? 1;
-  const currentExp = profile?.exp ?? 0;
-  const nextLevelExp = Math.floor(100 * Math.pow(currentLevel, 1.35));
-  const levelProgressPct = Math.min(100, Math.round((currentExp / Math.max(1, nextLevelExp)) * 100));
+  const currentLevel = profile?.level ?? vaultProfile?.level ?? 1;
+  const currentExp = profile?.exp ?? vaultProfile?.totalAccumulatedExp ?? 0;
+  const displayCoins = profile?.coins ?? vaultProfile?.walletCoins ?? 0;
+  const displayTotalScore = profile?.total_score ?? vaultProfile?.totalAccumulatedExp ?? 0;
+  const displayGamesPlayed = profile?.total_games_played ?? vaultProfile?.gamesPlayed ?? scoreHistory.length;
+  const nextLevelExp = currentLevel * 400;
+  const levelProgressPct = Math.min(
+    100,
+    Math.round(((currentExp % 400) / 400) * 100)
+  );
 
   const myGlobalRank =
     user && globalLeaders.length > 0
@@ -254,7 +327,7 @@ export const StudentDashboard: React.FC = () => {
                   <Gamepad2 className="w-3.5 h-3.5" /> STUDENT ADVENTURER HUB
                 </span>
                 <h1 className="font-game text-2xl sm:text-3xl font-extrabold text-slate-900 mt-1">
-                  {profile?.display_name || customAvatarName}
+                  {profile?.display_name || vaultProfile?.displayIdentity || customAvatarName}
                 </h1>
               </div>
 
@@ -266,6 +339,39 @@ export const StudentDashboard: React.FC = () => {
                 ใส่รหัส PIN เข้าร่วมห้องเกม!
               </button>
             </div>
+
+            {/* Student Identity Recall Bar (Remember Character + Coins by Real Name + Last 3 Digits) */}
+            {!user && (
+              <form
+                onSubmit={handleLoadOrSwitchStudentVault}
+                className="p-3 rounded-2xl bg-amber-100/90 border-2 border-slate-900 flex flex-wrap items-center gap-2"
+              >
+                <span className="text-xs font-extrabold text-slate-900 shrink-0">
+                  🪪 จำตัวละคร &amp; เหรียญสะสม:
+                </span>
+                <input
+                  type="text"
+                  value={idNameInput}
+                  onChange={(e) => setIdNameInput(e.target.value)}
+                  placeholder="ชื่อ-นามสกุลจริง"
+                  className="flex-1 min-w-[140px] rounded-xl border-2 border-slate-900 px-3 py-1.5 text-xs font-bold bg-white"
+                  required
+                />
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={3}
+                  value={idLast3Input}
+                  onChange={(e) => setIdLast3Input(e.target.value.replace(/\D/g, '').slice(0, 3))}
+                  placeholder="เลข 3 ตัวหลัง"
+                  className="w-28 rounded-xl border-2 border-slate-900 px-2.5 py-1.5 text-xs font-extrabold text-center bg-white"
+                  required
+                />
+                <button type="submit" className="btn-game-blue text-xs py-1.5 px-3.5 shrink-0">
+                  โหลดตัวละครเดิม
+                </button>
+              </form>
+            )}
 
             {/* Level 1-100 Progress Bar */}
             <div className="space-y-1.5">
@@ -286,28 +392,28 @@ export const StudentDashboard: React.FC = () => {
             {/* Stats Row */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-1">
               <div className="p-3 rounded-2xl bg-white border-2 border-slate-900">
-                <div className="text-xs font-bold text-slate-500">เหรียญสะสม (Coins)</div>
+                <div className="text-xs font-bold text-slate-500">เหรียญสะสม (ไว้ซื้อของแต่ง)</div>
                 <div className="font-game text-2xl font-extrabold text-amber-600 flex items-center gap-1">
                   <Coins className="w-5 h-5 fill-kw-yellow text-amber-700" />
-                  <span>{(profile?.coins ?? 0).toLocaleString()}</span>
+                  <span>{displayCoins.toLocaleString()}</span>
                 </div>
               </div>
               <div className="p-3 rounded-2xl bg-white border-2 border-slate-900">
                 <div className="text-xs font-bold text-slate-500">คะแนนสะสมรวม</div>
                 <div className="font-game text-2xl font-extrabold text-kw-blue">
-                  {(profile?.total_score ?? 0).toLocaleString()}
+                  {displayTotalScore.toLocaleString()}
                 </div>
               </div>
               <div className="p-3 rounded-2xl bg-white border-2 border-slate-900">
                 <div className="text-xs font-bold text-slate-500">จำนวนเกมที่เล่น</div>
                 <div className="font-game text-2xl font-extrabold text-kw-green">
-                  {profile?.total_games_played ?? scoreHistory.length} เกม
+                  {displayGamesPlayed} เกม
                 </div>
               </div>
               <div className="p-3 rounded-2xl bg-white border-2 border-slate-900">
-                <div className="text-xs font-bold text-slate-500">อันดับสะสม (Rank)</div>
+                <div className="text-xs font-bold text-slate-500">ตั๋วสุ่มกล่อง Lucky Block</div>
                 <div className="font-game text-2xl font-extrabold text-kw-red">
-                  {myGlobalRank > 0 ? `#${myGlobalRank}` : 'Unranked'}
+                  {vaultProfile ? `${vaultProfile.luckyTickets} ใบ` : myGlobalRank > 0 ? `#${myGlobalRank}` : '0 ใบ'}
                 </div>
               </div>
             </div>
@@ -550,7 +656,12 @@ export const StudentDashboard: React.FC = () => {
       {/* TAB 2: LUCKY BLOCK */}
       {activeTab === 'lucky' && (
         <div className="max-w-2xl mx-auto">
-          <LuckyBlockCard onRewardClaimed={() => loadStudentHub()} />
+          <LuckyBlockCard
+            onRewardClaimed={() => {
+              setVaultProfile(getActiveStudentVaultProfile());
+              loadStudentHub();
+            }}
+          />
         </div>
       )}
 

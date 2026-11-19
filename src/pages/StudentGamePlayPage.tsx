@@ -26,6 +26,15 @@ import { LuckyBlockCard } from '../components/luckyblock/LuckyBlockModal';
 import { soundEngine } from '../lib/soundEngine';
 import { buildShuffledQuestionOrder } from '../lib/securityGuard';
 import {
+  creditStudentGameReward,
+  ensureStudentVaultProfile,
+  getActiveStudentVaultProfile,
+  parseFormattedIdentity,
+  purchaseStudentVaultItem,
+  saveStudentVaultAvatar,
+  StudentVaultProfile,
+} from '../lib/studentIdentityVault';
+import {
   activatePlayerPowerRPC,
   disqualifyParticipantRPC,
   fetchGameRoomById,
@@ -129,6 +138,10 @@ export const StudentGamePlayPage: React.FC = () => {
   const [showLobbyCustomizer, setShowLobbyCustomizer] = useState<boolean>(false);
   const [lobbyAvatarSlot, setLobbyAvatarSlot] = useState<AvatarSlot>('gender');
   const [savingLobbyAvatar, setSavingLobbyAvatar] = useState<boolean>(false);
+  const [vaultProfile, setVaultProfile] = useState<StudentVaultProfile | null>(() =>
+    getActiveStudentVaultProfile()
+  );
+  const [lobbyShopMsg, setLobbyShopMsg] = useState<string | null>(null);
 
   // Activity Mode: Target Friend Selector for PvP Attack
   const [selectedTargetId, setSelectedTargetId] = useState<string>('');
@@ -401,9 +414,57 @@ export const StudentGamePlayPage: React.FC = () => {
     }
   }, [attackablePeers, selectedTargetId]);
 
-  // In-Lobby Avatar Switcher (stays inside /play/:roomId without leaving the game!)
-  const handleSelectLobbyAvatarItem = async (slot: AvatarSlot, code: string) => {
+  // Ensure Student Identity Vault is loaded for the current participant
+  useEffect(() => {
+    if (!participant?.nickname) return;
+    const { realName, last3Digits } = parseFormattedIdentity(participant.nickname);
+    const vp = ensureStudentVaultProfile(realName, last3Digits, participant.avatar_config);
+    setVaultProfile(vp);
+  }, [participant?.nickname]);
+
+  // Credit completion bonus (+100 Coins + 1 Free Lucky Block Ticket) once per finished room
+  useEffect(() => {
+    if (!room || room.status !== 'finished' || !vaultProfile) return;
+    const res = creditStudentGameReward(vaultProfile.identityKey, {
+      dedupeKey: `finish_${room.id}`,
+      coins: 100,
+      exp: 100,
+      luckyTickets: 1,
+      incrementGamesPlayed: true,
+    });
+    if (res.credited && res.profile) {
+      setVaultProfile(res.profile);
+    }
+  }, [room?.status, room?.id, vaultProfile?.identityKey]);
+
+  // In-Lobby Avatar Switcher & Mini Shop (stays inside /play/:roomId without leaving the game!)
+  const handleSelectLobbyAvatarItem = async (
+    slot: AvatarSlot,
+    code: string,
+    isStarter: boolean,
+    priceCoins: number
+  ) => {
     if (!room || !participant || room.status !== 'lobby') return;
+    setLobbyShopMsg(null);
+
+    const activeVault =
+      vaultProfile ||
+      (() => {
+        const { realName, last3Digits } = parseFormattedIdentity(participant.nickname);
+        return ensureStudentVaultProfile(realName, last3Digits, participant.avatar_config);
+      })();
+
+    const isOwned = isStarter || activeVault.ownedItemCodes.includes(code);
+    if (!isOwned) {
+      const bought = purchaseStudentVaultItem(activeVault.identityKey, code, priceCoins);
+      if (!bought.ok || !bought.profile) {
+        soundEngine.playWrongSound();
+        setLobbyShopMsg(bought.error || 'เหรียญสะสมไม่พอสำหรับซื้อไอเทมนี้');
+        return;
+      }
+      setVaultProfile(bought.profile);
+      setLobbyShopMsg(`🎉 ปลดล็อกไอเทมสำเร็จ! (เหลือ ${bought.profile.walletCoins.toLocaleString()} เหรียญ)`);
+    }
 
     const fieldMap: Record<AvatarSlot, keyof AvatarConfig> = {
       gender: 'gender',
@@ -428,6 +489,8 @@ export const StudentGamePlayPage: React.FC = () => {
     setParticipant(updatedPart);
     participantRef.current = updatedPart;
     setLocalAvatarConfig(nextConfig);
+    const savedVault = saveStudentVaultAvatar(activeVault.identityKey, nextConfig);
+    if (savedVault) setVaultProfile(savedVault);
     window.sessionStorage.setItem(`kw_participant_${room.id}`, JSON.stringify(updatedPart));
     soundEngine.playCoinSound();
 
@@ -815,6 +878,16 @@ export const StudentGamePlayPage: React.FC = () => {
       setSubmittedForQuestionId(questionPayload.question.id);
       setLastSubmitResult(res);
 
+      // Accumulate Coins & Total EXP into this student's persistent Identity Vault (kept across games for buying cosmetics!)
+      if (res.is_correct && vaultProfile) {
+        const reward = creditStudentGameReward(vaultProfile.identityKey, {
+          dedupeKey: `ans_${room.id}_${questionPayload.question.id}`,
+          coins: 60,
+          exp: 150,
+        });
+        if (reward.profile) setVaultProfile(reward.profile);
+      }
+
       await broadcastRef.current
         ?.({
           type: 'ANSWER_SUBMITTED',
@@ -1163,16 +1236,29 @@ export const StudentGamePlayPage: React.FC = () => {
                 exit={{ opacity: 0, height: 0 }}
                 className="max-w-2xl mx-auto p-4 rounded-2xl bg-white border-3 border-slate-900 text-left space-y-3 overflow-hidden"
               >
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="font-game text-sm font-extrabold text-slate-900 flex items-center gap-1.5">
                     <Palette className="w-4 h-4 text-kw-blue" /> แต่งตัวละครในห้องรอ (อัปเดตสดทันที)
                   </span>
-                  {savingLobbyAvatar && (
-                    <span className="text-[11px] font-bold text-kw-blue flex items-center gap-1">
-                      <Loader2 className="w-3 h-3 animate-spin" /> กำลังซิงค์...
-                    </span>
-                  )}
+                  <div className="flex items-center gap-2">
+                    {vaultProfile && (
+                      <span className="px-2.5 py-0.5 rounded-full bg-kw-yellow border-2 border-slate-900 text-xs font-extrabold">
+                        💰 {vaultProfile.walletCoins.toLocaleString()} เหรียญ
+                      </span>
+                    )}
+                    {savingLobbyAvatar && (
+                      <span className="text-[11px] font-bold text-kw-blue flex items-center gap-1">
+                        <Loader2 className="w-3 h-3 animate-spin" /> กำลังซิงค์...
+                      </span>
+                    )}
+                  </div>
                 </div>
+
+                {lobbyShopMsg && (
+                  <div className="p-2 rounded-xl bg-amber-100 border-2 border-slate-900 text-xs font-extrabold text-slate-900">
+                    {lobbyShopMsg}
+                  </div>
+                )}
 
                 {/* Slot Tabs */}
                 <div className="flex overflow-x-auto no-scrollbar gap-1.5 pb-1">
@@ -1192,11 +1278,9 @@ export const StudentGamePlayPage: React.FC = () => {
                   ))}
                 </div>
 
-                {/* Starter Items Grid for Selected Slot */}
+                {/* Items Grid (Free/Owned + Locked Shop Items buyable with accumulated Coins!) */}
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-60 overflow-y-auto pr-1">
-                  {BUILTIN_AVATAR_CATALOG.filter(
-                    (it) => it.slot === lobbyAvatarSlot && it.is_starter
-                  ).map((item) => {
+                  {BUILTIN_AVATAR_CATALOG.filter((it) => it.slot === lobbyAvatarSlot).map((item) => {
                     const fieldMap: Record<AvatarSlot, keyof AvatarConfig> = {
                       gender: 'gender',
                       face: 'face',
@@ -1206,25 +1290,44 @@ export const StudentGamePlayPage: React.FC = () => {
                       hat: 'hat',
                       accessory: 'accessory',
                     };
+                    const isOwned =
+                      item.is_starter ||
+                      Boolean(vaultProfile?.ownedItemCodes.includes(item.code));
                     const isEquipped = participant.avatar_config[fieldMap[item.slot]] === item.code;
                     return (
                       <button
                         key={item.id}
                         type="button"
-                        onClick={() => handleSelectLobbyAvatarItem(item.slot, item.code)}
-                        className={`p-2.5 rounded-xl border-2 border-slate-900 text-left flex items-center gap-2 transition ${
+                        onClick={() =>
+                          handleSelectLobbyAvatarItem(
+                            item.slot,
+                            item.code,
+                            item.is_starter,
+                            item.price_coins
+                          )
+                        }
+                        className={`p-2.5 rounded-xl border-2 border-slate-900 text-left flex items-center justify-between gap-2 transition ${
                           isEquipped
                             ? 'bg-kw-yellow ring-2 ring-slate-900'
-                            : 'bg-slate-50 hover:bg-amber-50'
+                            : isOwned
+                              ? 'bg-slate-50 hover:bg-amber-50'
+                              : 'bg-slate-100/90 hover:bg-amber-50 opacity-90'
                         }`}
                       >
-                        <span
-                          className="w-5 h-5 rounded-full border-2 border-slate-900 shrink-0"
-                          style={{ backgroundColor: item.preview_color }}
-                        />
-                        <span className="text-xs font-bold text-slate-900 leading-tight">
-                          {item.name}
-                        </span>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span
+                            className="w-5 h-5 rounded-full border-2 border-slate-900 shrink-0"
+                            style={{ backgroundColor: item.preview_color }}
+                          />
+                          <span className="text-xs font-bold text-slate-900 leading-tight truncate">
+                            {item.name}
+                          </span>
+                        </div>
+                        {!isOwned && (
+                          <span className="shrink-0 px-1.5 py-0.5 rounded-lg bg-slate-900 text-kw-yellow text-[10px] font-extrabold">
+                            🔒 {item.price_coins}
+                          </span>
+                        )}
                       </button>
                     );
                   })}

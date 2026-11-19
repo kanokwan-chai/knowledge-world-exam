@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
@@ -10,12 +10,18 @@ import {
   Loader2,
   IdCard,
   User,
+  Coins,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { AvatarRenderer, BUILTIN_AVATAR_CATALOG } from '../components/avatar/AvatarRenderer';
 import { QuestionBlockIcon } from '../components/ui/WorldDecorations';
 import { joinGameRoomRPC } from '../services/gameEngineService';
 import { formatStudentExamIdentity } from '../lib/securityGuard';
+import {
+  ensureStudentVaultProfile,
+  getStudentVaultProfile,
+  saveStudentVaultAvatar,
+} from '../lib/studentIdentityVault';
 import { AvatarSlot } from '../types/database';
 import { soundEngine } from '../lib/soundEngine';
 
@@ -44,6 +50,20 @@ export const LandingPage: React.FC = () => {
   const [joinError, setJoinError] = useState<string | null>(null);
   const [activeSlot, setActiveSlot] = useState<AvatarSlot>('hat');
 
+  // Auto-recognize returning student by Real Name + Last 3 Digits of Student ID
+  const matchedVault = useMemo(() => {
+    if (realName.trim().length >= 2 && /^\d{3}$/.test(studentIdLast3.trim())) {
+      return getStudentVaultProfile(realName, studentIdLast3);
+    }
+    return null;
+  }, [realName, studentIdLast3]);
+
+  useEffect(() => {
+    if (matchedVault) {
+      setLocalAvatarConfig(matchedVault.avatarConfig, matchedVault.displayIdentity);
+    }
+  }, [matchedVault?.identityKey]);
+
   const handleQuickJoinGame = async (e: React.FormEvent) => {
     e.preventDefault();
     soundEngine.playJumpSound();
@@ -71,6 +91,11 @@ export const LandingPage: React.FC = () => {
       } catch {
         // Ignore storage errors
       }
+
+      // Load or create persistent Student Identity Vault (remembers avatar, coins & level across games!)
+      const vault = ensureStudentVaultProfile(realName.trim(), studentIdLast3.trim(), avatarConfig);
+      // Save any quick starter tweaks made on LandingPage back to the student's vault
+      saveStudentVaultAvatar(vault.identityKey, avatarConfig);
 
       const participant = await joinGameRoomRPC(cleanPin, identity.formatted, avatarConfig);
       soundEngine.playPowerUpSound();
@@ -250,6 +275,23 @@ export const LandingPage: React.FC = () => {
               </div>
             </div>
           </div>
+
+          {matchedVault && (
+            <div className="p-3 rounded-2xl bg-amber-100 border-3 border-slate-900 flex flex-wrap items-center justify-between gap-2 text-xs font-extrabold text-slate-900">
+              <span className="flex items-center gap-1.5">
+                <Sparkles className="w-4 h-4 text-kw-orange shrink-0" />
+                <span>ยินดีต้อนรับกลับมา, {matchedVault.displayIdentity}! โหลดตัวละครเดิมให้แล้ว</span>
+              </span>
+              <span className="inline-flex items-center gap-2">
+                <span className="px-2 py-0.5 rounded-lg bg-kw-yellow border border-slate-900 inline-flex items-center gap-1">
+                  <Coins className="w-3.5 h-3.5 text-amber-800" /> {matchedVault.walletCoins.toLocaleString()} เหรียญ
+                </span>
+                <span className="px-2 py-0.5 rounded-lg bg-kw-blue text-white border border-slate-900">
+                  Lv.{matchedVault.level}
+                </span>
+              </span>
+            </div>
+          )}
 
           {joinError && (
             <div className="p-3 rounded-xl bg-red-100 border-2 border-red-600 text-red-900 text-xs font-bold flex items-center gap-2">
