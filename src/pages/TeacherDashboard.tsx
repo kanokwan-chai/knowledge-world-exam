@@ -582,71 +582,28 @@ export const TeacherDashboard: React.FC = () => {
     };
 
     return (
-      <div className="max-w-lg mx-auto px-4 py-10 space-y-4">
-        {dbHealth && (
-          <div
-            className={`card-game p-4 text-left space-y-2 ${
-              dbHealth.connected && dbHealth.tablesReady
-                ? 'bg-emerald-100 border-emerald-700'
-                : dbHealth.isConfigured
-                  ? 'bg-amber-100 border-amber-700'
-                  : 'bg-red-100 border-red-700'
-            }`}
-          >
-            <div className="text-xs font-extrabold text-slate-900 flex items-center justify-between">
-              <span>
-                {dbHealth.connected && dbHealth.tablesReady
-                  ? '🟢 สถานะฐานข้อมูล Supabase: เชื่อมต่อสำเร็จ!'
-                  : '🟠 สถานะฐานข้อมูล Supabase:'}
-              </span>
-              <button
-                type="button"
-                onClick={() => verifySupabaseConnectionHealth().then(setDbHealth)}
-                className="px-2.5 py-1 rounded-lg bg-white border border-slate-900 text-[11px] font-bold"
-              >
-                🔄 เช็คอีกครั้ง
-              </button>
-            </div>
-            <p className="text-xs font-bold text-slate-800">{dbHealth.message}</p>
-            {dbHealth.needsGrantFix && (
-              <button
-                type="button"
-                onClick={async () => {
-                  await navigator.clipboard.writeText(SUPABASE_GRANT_FIX_SQL);
-                  setCopiedGrantSql(true);
-                  setTimeout(() => setCopiedGrantSql(false), 3000);
-                }}
-                className="btn-game-yellow w-full py-2 text-xs"
-              >
-                {copiedGrantSql
-                  ? '✅ คัดลอกแล้ว! นำไปวางใน Supabase SQL Editor แล้วกด RUN ได้เลย'
-                  : '📋 คัดลอกคำสั่งปลดล็อกสิทธิ์ตาราง (4 บรรทัด) ไปรันใน SQL Editor'}
-              </button>
-            )}
-          </div>
-        )}
-
-        <div className="card-game p-8 space-y-6 text-center bg-gradient-to-b from-kw-cream to-amber-50">
+      <div className="max-w-md mx-auto px-4 py-14">
+        <div className="card-game p-7 sm:p-8 space-y-6 text-center bg-gradient-to-b from-kw-cream to-amber-50">
           <div className="w-16 h-16 mx-auto rounded-3xl bg-kw-red text-white border-4 border-slate-900 shadow-block-sm flex items-center justify-center">
             <Lock className="w-8 h-8" />
           </div>
 
           <div className="space-y-1">
             <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-slate-900 text-kw-yellow text-xs font-extrabold">
-              <ShieldCheck className="w-4 h-4" /> TEACHER SECURITY VAULT
+              <ShieldCheck className="w-4 h-4" /> TEACHER LOGIN
             </span>
             <h1 className="font-game text-2xl font-extrabold text-slate-900 pt-1">
-              ระบบป้องกันการเข้าถึงพื้นที่คุณครู
+              เข้าสู่ระบบสำหรับคุณครู
             </h1>
             <p className="text-xs font-semibold text-slate-600">
-              ป้องกันนักเรียนแอบพิมพ์ URL เข้ามาดูเฉลยหรือแก้ไขข้อสอบ กรุณากรอกรหัสผ่านเข้าหน้าคุณครู
+              กรุณากรอกรหัสผ่านคุณครูเพื่อเข้าสู่ระบบจัดการข้อสอบ
             </p>
           </div>
 
           <form onSubmit={handleUnlockGate} className="space-y-4 text-left">
             <div>
               <label className="block text-xs font-extrabold uppercase text-slate-700 mb-1">
-                รหัสผ่านเข้าหน้าคุณครู (Teacher Master Passcode)
+                รหัสผ่านเข้าหน้าคุณครู
               </label>
               <div className="relative">
                 <KeyRound className="w-5 h-5 text-slate-500 absolute left-3.5 top-3.5" />
@@ -657,10 +614,11 @@ export const TeacherDashboard: React.FC = () => {
                   placeholder="กรอกรหัสผ่านคุณครู"
                   className="w-full rounded-2xl border-3 border-slate-900 pl-11 pr-4 py-3 font-bold text-sm bg-white"
                   required
+                  autoFocus
                 />
               </div>
               <span className="block text-[11px] font-bold text-slate-500 mt-1">
-                * ระบบล็อกอัตโนมัติ 60 วินาทีหากใส่รหัสผิดครบ 5 ครั้ง (นักเรียนห้ามเข้าพื้นที่นี้เด็ดขาด)
+                * ล็อกอัตโนมัติ 60 วินาทีหากใส่รหัสผิดครบ 5 ครั้ง (นักเรียนห้ามเข้าพื้นที่นี้เด็ดขาด)
               </span>
             </div>
 
@@ -672,7 +630,7 @@ export const TeacherDashboard: React.FC = () => {
             )}
 
             <button type="submit" className="btn-game-green w-full py-3.5 text-base">
-              ปลดล็อกเข้าสู่ระบบคุณครู
+              เข้าสู่ระบบคุณครู
             </button>
           </form>
 

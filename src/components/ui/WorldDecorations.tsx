@@ -113,11 +113,10 @@ export const TopAdventureNavbar: React.FC = () => {
   const [urlInput, setUrlInput] = useState(supaConfig.url);
   const [anonInput, setAnonInput] = useState(supaConfig.anonKey);
 
-  // Strict Portal Separation: Teacher UI elements ONLY appear inside /teacher* routes WHEN unlocked by Teacher Gate or Teacher Role
-  const isTeacherPortal =
-    location.pathname.startsWith('/teacher') &&
-    profile?.role !== 'student' &&
-    (isTeacherGateUnlocked() || profile?.role === 'teacher');
+  // Strict Portal Separation: Teacher UI elements ONLY appear inside /teacher* routes AFTER unlocking Teacher Passcode Vault
+  const isTeacherRoute = location.pathname.startsWith('/teacher');
+  const isTeacherLocked = isTeacherRoute && !isTeacherGateUnlocked();
+  const isTeacherPortal = isTeacherRoute && profile?.role !== 'student' && isTeacherGateUnlocked();
 
   const isPlayingExam = location.pathname.startsWith('/play');
 
@@ -186,6 +185,9 @@ export const TopAdventureNavbar: React.FC = () => {
           </Link>
 
           <div className="flex items-center flex-wrap gap-1.5 sm:gap-2">
+            {/* When /teacher is locked: show ZERO nav buttons/clutter — only the clean passcode login screen */}
+            {!isTeacherLocked && (
+              <>
             {/* Sound Effects (SFX) Toggle */}
             <button
               type="button"
@@ -249,23 +251,19 @@ export const TopAdventureNavbar: React.FC = () => {
                ============================================================== */}
             {isTeacherPortal ? (
               <>
-                <button
-                  type="button"
-                  onClick={() => {
-                    soundEngine.playClickSound();
-                    setShowConfigModal(true);
-                  }}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border-2 border-slate-900 transition ${
-                    isSupabaseConfigured
-                      ? 'bg-sky-100 text-sky-900 hover:bg-sky-200'
-                      : 'bg-amber-300 text-slate-950 animate-pulse shadow-sm'
-                  }`}
-                >
-                  <Database className="w-3.5 h-3.5" />
-                  <span>
-                    {isSupabaseConfigured ? 'Supabase Connected' : '⚙️ ตั้งค่าเชื่อม Supabase DB'}
-                  </span>
-                </button>
+                {!isSupabaseConfigured && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      soundEngine.playClickSound();
+                      setShowConfigModal(true);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border-2 border-slate-900 transition bg-amber-300 text-slate-950 animate-pulse shadow-sm"
+                  >
+                    <Database className="w-3.5 h-3.5" />
+                    <span>⚙️ ตั้งค่าเชื่อม Supabase DB</span>
+                  </button>
+                )}
 
                 <Link
                   to="/teacher"
@@ -334,12 +332,14 @@ export const TopAdventureNavbar: React.FC = () => {
                 )}
               </>
             )}
+              </>
+            )}
           </div>
         </div>
       </header>
 
       {/* Fixed Mobile Bottom Navigation Bar (Students only, hidden during live /play exam & /teacher*) */}
-      {!isTeacherPortal && !isPlayingExam && (
+      {!isTeacherRoute && !isPlayingExam && (
         <nav
           aria-label="Mobile Student Navigation"
           className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-kw-cream/95 backdrop-blur border-t-4 border-slate-900 px-3 pt-2 safe-bottom"

@@ -188,7 +188,7 @@ export function clearFailedSecurityAttempts(): void {
  * 6. Teacher Portal Master Passcode Gate (Prevents students from opening /teacher by URL)
  */
 const DEFAULT_TEACHER_ACCESS_CODE =
-  (import.meta.env.VITE_TEACHER_ACCESS_CODE as string | undefined) || 'TEACHER2026';
+  (import.meta.env.VITE_TEACHER_ACCESS_CODE as string | undefined) || '123456789';
 
 export function isTeacherGateUnlocked(): boolean {
   if (typeof window === 'undefined') return false;

@@ -145,7 +145,7 @@ describe('Knowledge World — Database Architecture & Security Verification', ()
 
     // 4. Teacher Master Passcode Gate
     expect(verifyTeacherAccessCode('WRONG_PASS').unlocked).toBe(false);
-    expect(verifyTeacherAccessCode('TEACHER2026').unlocked).toBe(true);
+    expect(verifyTeacherAccessCode('123456789').unlocked).toBe(true);
   });
 
   it('auto-parses pasted multi-question Thai and English quiz text into structured questions and choices', () => {
