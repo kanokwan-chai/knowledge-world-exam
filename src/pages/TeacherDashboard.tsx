@@ -180,6 +180,16 @@ export const TeacherDashboard: React.FC = () => {
   useEffect(() => {
     setDemoDataEnabled(false);
     verifySupabaseConnectionHealth().then(setDbHealth).catch(() => null);
+    const syncGate = () => {
+      const unlocked = isTeacherGateUnlocked();
+      setGateUnlocked(unlocked);
+      if (!unlocked) {
+        setGatePasscode('');
+        setGateError(null);
+      }
+    };
+    window.addEventListener('kw-teacher-gate-changed', syncGate);
+    return () => window.removeEventListener('kw-teacher-gate-changed', syncGate);
   }, []);
 
   // Classroom Form

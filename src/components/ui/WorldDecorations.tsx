@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -27,7 +27,7 @@ import {
   clearRuntimeSupabaseConfig,
 } from '../../lib/supabase';
 import { soundEngine } from '../../lib/soundEngine';
-import { isTeacherGateUnlocked } from '../../lib/securityGuard';
+import { isTeacherGateUnlocked, lockTeacherGate } from '../../lib/securityGuard';
 
 import schemaSql from '../../../supabase/migrations/001_schema.sql?raw';
 import rpcSql from '../../../supabase/migrations/002_rpc_and_security.sql?raw';
@@ -108,6 +108,13 @@ export const TopAdventureNavbar: React.FC = () => {
   const [copiedSql, setCopiedSql] = useState(false);
   const [isMuted, setIsMuted] = useState<boolean>(() => soundEngine.getMuted());
   const [bgmOn, setBgmOn] = useState<boolean>(() => soundEngine.isBgmActive());
+  const [teacherUnlocked, setTeacherUnlocked] = useState<boolean>(() => isTeacherGateUnlocked());
+
+  useEffect(() => {
+    const syncGate = () => setTeacherUnlocked(isTeacherGateUnlocked());
+    window.addEventListener('kw-teacher-gate-changed', syncGate);
+    return () => window.removeEventListener('kw-teacher-gate-changed', syncGate);
+  }, []);
 
   const supaConfig = getSupabaseConfig();
   const [urlInput, setUrlInput] = useState(supaConfig.url);
@@ -115,8 +122,8 @@ export const TopAdventureNavbar: React.FC = () => {
 
   // Strict Portal Separation: Teacher UI elements ONLY appear inside /teacher* routes AFTER unlocking Teacher Passcode Vault
   const isTeacherRoute = location.pathname.startsWith('/teacher');
-  const isTeacherLocked = isTeacherRoute && !isTeacherGateUnlocked();
-  const isTeacherPortal = isTeacherRoute && profile?.role !== 'student' && isTeacherGateUnlocked();
+  const isTeacherLocked = isTeacherRoute && !teacherUnlocked;
+  const isTeacherPortal = isTeacherRoute && profile?.role !== 'student' && teacherUnlocked;
 
   const isPlayingExam = location.pathname.startsWith('/play');
 
@@ -274,20 +281,19 @@ export const TopAdventureNavbar: React.FC = () => {
                   <span>จัดการข้อสอบ & ห้องเรียน</span>
                 </Link>
 
-                {profile && (
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      soundEngine.playClickSound();
-                      await signOut();
-                      navigate('/teacher');
-                    }}
-                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-900 font-bold text-sm border-2 border-slate-900"
-                    title="ออกจากระบบครู"
-                  >
-                    <LogOut className="w-4 h-4" />
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundEngine.playClickSound();
+                    lockTeacherGate();
+                    navigate('/teacher', { replace: true });
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-kw-yellow font-bold text-xs sm:text-sm border-2 border-slate-900"
+                  title="ล็อกและออกจากหน้าคุณครู"
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span className="hidden sm:inline">ออกจากหน้าครู</span>
+                </button>
               </>
             ) : (
               /* STUDENT-ONLY NAVBAR — ZERO TEACHER REFERENCES */

@@ -217,6 +217,7 @@ export function verifyTeacherAccessCode(inputCode: string): {
     clearFailedSecurityAttempts();
     if (typeof window !== 'undefined') {
       window.sessionStorage.setItem(TEACHER_GATE_UNLOCKED_KEY, 'true');
+      window.dispatchEvent(new Event('kw-teacher-gate-changed'));
     }
     return { unlocked: true };
   }
@@ -238,6 +239,7 @@ export function verifyTeacherAccessCode(inputCode: string): {
 export function lockTeacherGate(): void {
   if (typeof window === 'undefined') return;
   window.sessionStorage.removeItem(TEACHER_GATE_UNLOCKED_KEY);
+  window.dispatchEvent(new Event('kw-teacher-gate-changed'));
 }
 
 export function getCurrentTeacherAccessCode(): string {
