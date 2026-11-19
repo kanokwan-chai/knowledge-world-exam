@@ -189,6 +189,18 @@ export const StudentGamePlayPage: React.FC = () => {
         if (targetRoom.game_mode !== 'serious_exam') {
           soundEngine.playVictoryFanfare();
         }
+        // Refresh participant's final real exam score from Supabase immediately on finish
+        fetchRoomParticipants(targetRoom.id)
+          .then((parts) => {
+            setLeaderboard(parts);
+            const me = parts.find((p) => p.id === partId);
+            if (me) {
+              setParticipant(me);
+              participantRef.current = me;
+              window.sessionStorage.setItem(`kw_participant_${targetRoom.id}`, JSON.stringify(me));
+            }
+          })
+          .catch(() => {});
         setRoom({ ...targetRoom, status: 'finished' });
         setQuestionPayload(null);
         return false;
@@ -1563,16 +1575,43 @@ export const StudentGamePlayPage: React.FC = () => {
       {(room.status === 'leaderboard' || room.status === 'finished') && (
         <div className="space-y-4 sm:space-y-6">
           {isSeriousExam ? (
-            <div className="card-game p-6 sm:p-8 text-center space-y-4 bg-emerald-50">
+            <div className="card-game p-6 sm:p-8 text-center space-y-5 bg-emerald-50">
               <CheckCircle2 className="w-14 h-14 mx-auto text-kw-green" />
-              <h2 className="font-game text-2xl sm:text-3xl font-extrabold text-slate-900">
-                ส่งข้อสอบครบทุกข้อเรียบร้อยแล้ว!
-              </h2>
-              <p className="text-sm font-bold text-slate-700 max-w-md mx-auto">
-                ระบบได้บันทึกคำตอบของ <strong>{participant.nickname}</strong> ลงฐานข้อมูลเรียบร้อยแล้ว
-                (โหมดสอบวัดความรู้จริงจะไม่เฉลยคำตอบบนหน้าจอนักเรียน — คุณครูสามารถตรวจและประกาศผลได้ทันที)
+              <div className="space-y-1">
+                <span className="inline-block px-3 py-1 rounded-full bg-slate-900 text-kw-yellow font-game text-xs font-extrabold">
+                  📝 ผลการสอบวัดความรู้จริง (Real Exam Score)
+                </span>
+                <h2 className="font-game text-2xl sm:text-3xl font-extrabold text-slate-900 pt-1">
+                  ส่งข้อสอบครบทุกข้อเรียบร้อยแล้ว!
+                </h2>
+              </div>
+
+              {/* Instant Real Exam Score Summary Card (No answer reveal) */}
+              <div className="max-w-md mx-auto p-5 rounded-3xl bg-white border-4 border-slate-900 shadow-block-sm space-y-2">
+                <div className="text-xs font-extrabold text-slate-600">
+                  ผู้เข้าสอบ: <span className="text-slate-900">{participant.nickname}</span>
+                </div>
+                <div className="text-xs font-extrabold uppercase text-emerald-700">
+                  คะแนนสอบจริงที่คุณทำได้
+                </div>
+                <div className="font-game text-4xl sm:text-5xl font-extrabold text-kw-green">
+                  {participant.correct_count}{' '}
+                  <span className="text-2xl text-slate-600">
+                    / {displayTotalQ > 0 ? displayTotalQ : '-'} คะแนน
+                  </span>
+                </div>
+                {displayTotalQ > 0 && (
+                  <div className="inline-block px-3 py-1 rounded-full bg-emerald-100 border-2 border-emerald-700 text-emerald-950 font-game font-extrabold text-sm">
+                    คิดเป็น {Math.round((participant.correct_count / displayTotalQ) * 100)}%
+                  </div>
+                )}
+              </div>
+
+              <p className="text-xs sm:text-sm font-bold text-slate-700 max-w-md mx-auto">
+                ระบบบันทึกคะแนนของ <strong>{participant.nickname}</strong> ลงฐานข้อมูลคุณครูเรียบร้อยแล้ว
+                (โหมดสอบวัดความรู้จริงจะไม่เฉลยคำตอบรายข้อเพื่อป้องกันการบอกข้อสอบเพื่อน)
               </p>
-              <div className="pt-2">
+              <div className="pt-1">
                 <button
                   type="button"
                   onClick={() => navigate('/')}

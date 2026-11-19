@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { Session, User } from '@supabase/supabase-js';
 import { supabase, getSupabaseConfig } from '../lib/supabase';
+import { setCustomTeacherAccessCode } from '../lib/securityGuard';
 import { AvatarConfig, Profile, UserRole } from '../types/database';
 import { fetchPlayerAvatar, fetchUserProfile } from '../services/gameEngineService';
 
@@ -127,6 +128,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     supabase.auth.getSession().then(({ data: { session: currentSession } }) => {
       setSession(currentSession);
       setUser(currentSession?.user ?? null);
+      const savedVaultCode = currentSession?.user?.user_metadata?.teacher_vault_code;
+      if (typeof savedVaultCode === 'string' && savedVaultCode.trim().length >= 4) {
+        try {
+          setCustomTeacherAccessCode(savedVaultCode);
+        } catch {
+          // Ignore invalid code
+        }
+      }
       if (currentSession?.user) {
         loadUserProfileAndAvatar(currentSession.user.id).finally(() => setLoading(false));
       } else {
@@ -139,6 +148,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
       setUser(nextSession?.user ?? null);
+      const savedVaultCode = nextSession?.user?.user_metadata?.teacher_vault_code;
+      if (typeof savedVaultCode === 'string' && savedVaultCode.trim().length >= 4) {
+        try {
+          setCustomTeacherAccessCode(savedVaultCode);
+        } catch {
+          // Ignore invalid code
+        }
+      }
       if (nextSession?.user) {
         loadUserProfileAndAvatar(nextSession.user.id);
       } else {

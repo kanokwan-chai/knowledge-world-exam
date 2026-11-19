@@ -42,6 +42,7 @@ import {
 } from '../lib/securityGuard';
 import { soundEngine } from '../lib/soundEngine';
 import {
+  supabase,
   verifySupabaseConnectionHealth,
   SUPABASE_GRANT_FIX_SQL,
   SUPABASE_TEACHER_AUTH_FIX_SQL,
@@ -119,6 +120,7 @@ export const TeacherDashboard: React.FC = () => {
   const [gateError, setGateError] = useState<string | null>(null);
   const [showChangeCodeModal, setShowChangeCodeModal] = useState(false);
   const [newCustomCode, setNewCustomCode] = useState('');
+  const [confirmCustomCode, setConfirmCustomCode] = useState('');
   const [codeSavedNotice, setCodeSavedNotice] = useState<string | null>(null);
 
   // Demo Data State (can be wiped in 1 click anytime)
@@ -527,17 +529,33 @@ export const TeacherDashboard: React.FC = () => {
     }
   };
 
-  const handleSaveCustomPasscode = (e: React.FormEvent) => {
+  const handleSaveCustomPasscode = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError(null);
+    const trimmed = newCustomCode.trim();
+    if (trimmed.length < 4) {
+      setError('รหัสผ่านคุณครูต้องยาวอย่างน้อย 4 ตัวอักษร');
+      return;
+    }
+    if (confirmCustomCode && trimmed !== confirmCustomCode.trim()) {
+      soundEngine.playWrongSound();
+      setError('รหัสผ่านใหม่และยืนยันรหัสผ่านไม่ตรงกัน กรุณาตรวจสอบอีกครั้ง');
+      return;
+    }
     try {
-      setCustomTeacherAccessCode(newCustomCode);
+      setCustomTeacherAccessCode(trimmed);
+      if (user) {
+        await supabase.auth
+          .updateUser({ data: { teacher_vault_code: trimmed } })
+          .catch(() => null);
+      }
       soundEngine.playCoinSound();
-      setCodeSavedNotice(`ตั้งรหัสผ่านคุณครูใหม่เรียบร้อยแล้ว!`);
+      setCodeSavedNotice(`✅ เปลี่ยนรหัสผ่านเข้าหน้าคุณครูใหม่เป็น "${trimmed}" เรียบร้อยแล้ว!`);
       setNewCustomCode('');
+      setConfirmCustomCode('');
       setTimeout(() => {
         setCodeSavedNotice(null);
-        setShowChangeCodeModal(false);
-      }, 1800);
+      }, 4000);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'ตั้งรหัสไม่สำเร็จ');
     }
@@ -925,10 +943,10 @@ export const TeacherDashboard: React.FC = () => {
           <button
             type="button"
             onClick={() => setShowChangeCodeModal((v) => !v)}
-            className="px-3.5 py-2.5 rounded-2xl bg-white hover:bg-amber-50 text-slate-900 font-game font-bold text-xs border-2 border-slate-900 flex items-center gap-1.5"
+            className="px-3.5 py-2.5 rounded-2xl bg-amber-100 hover:bg-kw-yellow text-slate-900 font-game font-extrabold text-xs border-2 border-slate-900 flex items-center gap-1.5 shadow-sm"
           >
             <KeyRound className="w-4 h-4 text-kw-red" />
-            <span>ตั้งรหัสครูเอง</span>
+            <span>🔑 เปลี่ยนรหัสเข้าหน้าครู</span>
           </button>
           <button
             type="button"
@@ -992,18 +1010,36 @@ export const TeacherDashboard: React.FC = () => {
                 (ใช้กรอกตอนหน้าจอถูกล็อก เพื่อกันนักเรียนแอบเข้าหน้าครู)
               </span>
             </div>
-            <label className="block text-xs font-extrabold uppercase text-slate-800 pt-1">
-              ตั้งรหัสผ่านคุณครูใหม่ด้วยตัวเอง:
-            </label>
-            <input
-              type="text"
-              minLength={4}
-              value={newCustomCode}
-              onChange={(e) => setNewCustomCode(e.target.value)}
-              placeholder="พิมพ์รหัสครูใหม่ที่คุณต้องการตั้งเอง (เช่น 1234 หรือ KRU2026)..."
-              className="w-full rounded-xl border-2 border-slate-900 px-3 py-2.5 text-sm font-bold bg-white"
-              required
-            />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+              <div>
+                <label className="block text-xs font-extrabold uppercase text-slate-800 mb-1">
+                  ตั้งรหัสผ่านคุณครูใหม่ (อย่างน้อย 4 ตัวอักษร):
+                </label>
+                <input
+                  type="text"
+                  minLength={4}
+                  value={newCustomCode}
+                  onChange={(e) => setNewCustomCode(e.target.value)}
+                  placeholder="พิมพ์รหัสใหม่ เช่น KRUMAIL99 หรือ 2569"
+                  className="w-full rounded-xl border-2 border-slate-900 px-3 py-2.5 text-sm font-bold bg-white"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-extrabold uppercase text-slate-800 mb-1">
+                  ยืนยันรหัสผ่านใหม่อีกครั้ง:
+                </label>
+                <input
+                  type="text"
+                  minLength={4}
+                  value={confirmCustomCode}
+                  onChange={(e) => setConfirmCustomCode(e.target.value)}
+                  placeholder="พิมพ์รหัสใหม่ซ้ำอีกครั้งเพื่อยืนยัน"
+                  className="w-full rounded-xl border-2 border-slate-900 px-3 py-2.5 text-sm font-bold bg-white"
+                  required
+                />
+              </div>
+            </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {codeSavedNotice && (
