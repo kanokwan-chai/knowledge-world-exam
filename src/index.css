@@ -1,0 +1,105 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    overflow-y: auto;
+  }
+
+  body {
+    font-family: 'Kanit', sans-serif;
+    background-color: #5C94FC;
+    background-image:
+      radial-gradient(circle at 20% 20%, rgba(255, 255, 255, 0.22) 0%, transparent 25%),
+      radial-gradient(circle at 80% 15%, rgba(255, 255, 255, 0.18) 0%, transparent 30%),
+      linear-gradient(180deg, #5C94FC 0%, #78B0FF 72%, #43B047 100%);
+    background-attachment: scroll;
+    min-height: 100vh;
+    overscroll-behavior-y: contain;
+  }
+
+  #root {
+    overflow-x: clip;
+  }
+
+  @media (min-width: 768px) {
+    body {
+      background-attachment: fixed;
+    }
+  }
+
+  button,
+  a,
+  input,
+  select,
+  textarea,
+  label {
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+
+  h1, h2, h3, .font-game {
+    font-family: 'Fredoka', 'Kanit', sans-serif;
+  }
+}
+
+@layer components {
+  .btn-game {
+    @apply relative inline-flex items-center justify-center font-bold rounded-2xl border-4 border-slate-900 px-5 py-3 min-h-[48px] touch-manipulation transition-all duration-150 select-none shadow-block active:translate-y-1 active:shadow-block-active disabled:opacity-50 disabled:pointer-events-none;
+  }
+
+  .btn-game-red {
+    @apply btn-game bg-kw-red text-white hover:bg-[#ff312d];
+  }
+
+  .btn-game-yellow {
+    @apply btn-game bg-kw-yellow text-slate-900 hover:bg-[#ffe033];
+  }
+
+  .btn-game-green {
+    @apply btn-game bg-kw-green text-white hover:bg-[#4ec952];
+  }
+
+  .btn-game-blue {
+    @apply btn-game bg-kw-blue text-white hover:bg-[#14b2f0];
+  }
+
+  .btn-game-orange {
+    @apply btn-game bg-kw-orange text-white hover:bg-[#ff911a];
+  }
+
+  .card-game {
+    @apply bg-kw-cream border-4 border-slate-900 rounded-3xl shadow-card-3d;
+  }
+
+  .brick-pattern {
+    background-color: #C84C0C;
+    background-image:
+      linear-gradient(335deg, #b03e05 23px, transparent 23px),
+      linear-gradient(155deg, #d95714 23px, transparent 23px),
+      linear-gradient(335deg, #b03e05 23px, transparent 23px),
+      linear-gradient(155deg, #d95714 23px, transparent 23px);
+    background-size: 58px 58px;
+    background-position: 0px 2px, 4px 35px, 29px 31px, 34px 6px;
+  }
+
+  .pipe-green {
+    background: linear-gradient(90deg, #2b8230 0%, #5ee064 30%, #43B047 65%, #1e6321 100%);
+    border: 4px solid #0f172a;
+  }
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.safe-bottom {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}
