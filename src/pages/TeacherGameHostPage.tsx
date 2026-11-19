@@ -273,6 +273,7 @@ export const TeacherGameHostPage: React.FC = () => {
       setRoom(updated);
       const parts = await fetchRoomParticipants(roomId);
       setParticipants(parts);
+      soundEngine.playVictoryFanfare();
       await broadcastRef.current?.({
         type: 'ROOM_STATUS_CHANGED',
         status: 'leaderboard',
@@ -474,15 +475,28 @@ export const TeacherGameHostPage: React.FC = () => {
           )}
 
           {room.status === 'question_active' && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={handleRevealAnswer}
-              className="btn-game-orange text-sm py-2.5 px-5 flex items-center gap-2"
-            >
-              <CheckCircle2 className="w-4 h-4" />
-              <span>ล็อกคำตอบ & เฉลยทันที</span>
-            </button>
+            <>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={handleShowLeaderboard}
+                className="btn-game-yellow text-sm py-2.5 px-5 flex items-center gap-2"
+              >
+                <Trophy className="w-4 h-4 text-kw-red" />
+                <span>⏹️ หยุดข้อนี้ &amp; โชว์โพเดียมทันที</span>
+              </button>
+              {room.game_mode !== 'serious_exam' && hasMoreQuestions && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => handleStartOrNextQuestion(room.current_question_index + 1)}
+                  className="btn-game-blue text-sm py-2.5 px-5 flex items-center gap-2"
+                >
+                  <SkipForward className="w-4 h-4" />
+                  <span>เริ่มข้อถัดไป (ข้อ {room.current_question_index + 2}/{totalQuestions})</span>
+                </button>
+              )}
+            </>
           )}
 
           {room.status === 'question_reveal' && (
@@ -493,7 +507,7 @@ export const TeacherGameHostPage: React.FC = () => {
               className="btn-game-yellow text-sm py-2.5 px-5 flex items-center gap-2"
             >
               <Trophy className="w-4 h-4" />
-              <span>แสดงอันดับ Leaderboard</span>
+              <span>แสดงโพเดียมอันดับ</span>
             </button>
           )}
 
@@ -503,10 +517,10 @@ export const TeacherGameHostPage: React.FC = () => {
                 type="button"
                 disabled={busy}
                 onClick={() => handleStartOrNextQuestion(room.current_question_index + 1)}
-                className="btn-game-blue text-sm py-2.5 px-5 flex items-center gap-2"
+                className="btn-game-green text-sm py-2.5 px-5 flex items-center gap-2"
               >
                 <SkipForward className="w-4 h-4" />
-                <span>คำถามข้อถัดไป (ข้อ {room.current_question_index + 2}/{totalQuestions})</span>
+                <span>▶️ เริ่มข้อถัดไป (ข้อ {room.current_question_index + 2}/{totalQuestions})</span>
               </button>
             )}
 

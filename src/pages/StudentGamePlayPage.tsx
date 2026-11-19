@@ -19,7 +19,6 @@ import {
   Ban,
   Palette,
   Crosshair,
-  ArrowRight,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { AvatarRenderer, BUILTIN_AVATAR_CATALOG } from '../components/avatar/AvatarRenderer';
@@ -270,23 +269,51 @@ export const StudentGamePlayPage: React.FC = () => {
         return;
       }
 
+      const incomingIsSerious = incomingRoom.game_mode === 'serious_exam';
+
       if (incomingRoom.status === 'question_active') {
-        // First time entering active exam from lobby or reload
-        if (!prevRoom || prevRoom.status === 'lobby' || !questionPayloadRef.current) {
-          if (prevRoom?.status === 'lobby' && incomingRoom.game_mode !== 'serious_exam') {
-            soundEngine.playPowerUpSound();
+        const partId = curPart?.id || 'guest';
+
+        // Activity Mode: Teacher controls question progression (Teacher clicks Next -> students advance to that step)
+        if (!incomingIsSerious) {
+          const needsLoad =
+            !prevRoom ||
+            prevRoom.status !== 'question_active' ||
+            prevRoom.current_question_index !== incomingRoom.current_question_index ||
+            !questionPayloadRef.current;
+
+          if (needsLoad) {
+            if (prevRoom?.status === 'lobby' || prevRoom?.status === 'leaderboard') {
+              soundEngine.playPowerUpSound();
+            }
+            await loadStudentQuestionStep(incomingRoom, incomingRoom.current_question_index, partId);
           }
-          const partId = curPart?.id || 'guest';
+          return;
+        }
+
+        // Serious Exam Mode: Student progresses independently through their own shuffled question order
+        if (!prevRoom || prevRoom.status === 'lobby' || !questionPayloadRef.current) {
           const savedStepRaw = window.sessionStorage.getItem(`kw_step_${incomingRoom.id}`);
           const savedStep = savedStepRaw ? Math.max(0, Number(savedStepRaw) || 0) : 0;
           await loadStudentQuestionStep(incomingRoom, savedStep, partId);
           return;
         }
-        // Student already progressing independently through their own shuffled question order — do NOT overwrite their timer or question!
         return;
       }
 
-      // If teacher manually switches to leaderboard on host, only sync if student has finished or in activity mode
+      // Activity Mode: When teacher clicks Stop/Pause, immediately pop up the Podium!
+      if (
+        !incomingIsSerious &&
+        (incomingRoom.status === 'leaderboard' || incomingRoom.status === 'question_reveal')
+      ) {
+        if (prevRoom?.status !== 'leaderboard') {
+          soundEngine.playVictoryFanfare();
+        }
+        setRoom({ ...incomingRoom, status: 'leaderboard' });
+        return;
+      }
+
+      // Serious Exam fallback: only switch to leaderboard if not actively answering
       if (incomingRoom.status === 'leaderboard' && prevRoom?.status !== 'question_active') {
         setRoom(incomingRoom);
       }
@@ -720,10 +747,13 @@ export const StudentGamePlayPage: React.FC = () => {
       }
       if (secs <= 0 && !advancedOnTimeout) {
         advancedOnTimeout = true;
-        if (room.game_mode !== 'serious_exam') {
+        if (room.game_mode === 'serious_exam') {
+          // Serious Exam: auto-advance immediately on timeout (0 pts)
+          advanceToNextQuestionAuto(room);
+        } else {
+          // Activity Mode: stop accepting answers and wait for teacher to show podium or start next question
           soundEngine.playWrongSound();
         }
-        advanceToNextQuestionAuto(room);
       }
       prevSec = secs;
     };
@@ -759,7 +789,6 @@ export const StudentGamePlayPage: React.FC = () => {
     setSubmitting(true);
     setError(null);
     setSelectedChoiceId(choiceId ?? null);
-    const isFemale = participant.avatar_config.gender === 'female';
     const serious = room.game_mode === 'serious_exam';
 
     try {
@@ -771,17 +800,15 @@ export const StudentGamePlayPage: React.FC = () => {
         textAnswer: textAnswer.trim() || null,
       });
 
-      // In Serious Exam mode: NEVER reveal whether answer is right/wrong or play right/wrong sounds
+      // Subtle sound effects only in Activity Mode (NO spoken voice saying right/wrong!)
       if (!serious) {
         if (res.is_correct) {
           soundEngine.playCorrectSound();
-          soundEngine.speakCharacterVoice('เย้! ตอบถูกแล้ว!', isFemale);
           if (res.dropped_power) {
             setTimeout(() => soundEngine.playPowerUpSound(), 320);
           }
         } else {
           soundEngine.playWrongSound();
-          soundEngine.speakCharacterVoice('ยังไม่ถูกนะ เอาใหม่ข้อถัดไป!', isFemale);
         }
       }
 
@@ -805,14 +832,17 @@ export const StudentGamePlayPage: React.FC = () => {
       if (me) setParticipant(me);
       setPowers(pws);
 
-      // Serious exam: fast neutral advance (650ms). Activity game: show mini podium (2200ms) or click button.
-      if (advanceTimerRef.current) clearTimeout(advanceTimerRef.current);
-      advanceTimerRef.current = setTimeout(() => {
-        advanceToNextQuestionAuto(room);
-      }, serious ? 650 : 2200);
+      // Serious Exam: fast neutral auto-advance (650ms).
+      // Activity Mode: DO NOT auto-advance — wait for teacher to click Stop/Podium or Next Question!
+      if (serious) {
+        if (advanceTimerRef.current) clearTimeout(advanceTimerRef.current);
+        advanceTimerRef.current = setTimeout(() => {
+          advanceToNextQuestionAuto(room);
+        }, 650);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'ส่งคำตอบไม่สำเร็จ';
-      if (msg.includes('ส่งคำตอบของข้อนี้ไปแล้ว')) {
+      if (msg.includes('ส่งคำตอบของข้อนี้ไปแล้ว') && serious) {
         setTimeout(() => advanceToNextQuestionAuto(room), 350);
       } else {
         setError(msg);
@@ -1379,6 +1409,13 @@ export const StudentGamePlayPage: React.FC = () => {
             </div>
           )}
 
+          {/* Activity Mode: Timeout Notice while waiting for teacher */}
+          {!isSeriousExam && !lastSubmitResult && secondsLeft <= 0 && (
+            <div className="relative z-10 p-4 rounded-2xl bg-amber-100 border-3 border-slate-900 text-center font-game font-extrabold text-sm text-slate-900">
+              ⏰ หมดเวลาข้อนี้แล้ว (+0 คะแนน) — รอคุณครูกดหยุดโชว์โพเดียม หรือเริ่มข้อถัดไป...
+            </div>
+          )}
+
           {/* Answer Feedback: Neutral in Serious Exam vs Mini-Podium in Activity Game */}
           {lastSubmitResult && (
             <motion.div
@@ -1423,14 +1460,9 @@ export const StudentGamePlayPage: React.FC = () => {
                       <span className="px-2.5 py-1 rounded-xl bg-kw-yellow text-slate-900 border-2 border-slate-900 font-game font-extrabold text-xs">
                         ⭐ +{lastSubmitResult.total_points_awarded.toLocaleString()} EXP
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => advanceToNextQuestionAuto(room)}
-                        className="px-3 py-1 rounded-xl bg-slate-900 text-kw-yellow font-game font-extrabold text-xs flex items-center gap-1"
-                      >
-                        <span>ไปข้อถัดไป</span>
-                        <ArrowRight className="w-3.5 h-3.5" />
-                      </button>
+                      <span className="px-3 py-1 rounded-xl bg-slate-900 text-kw-yellow font-game font-extrabold text-xs animate-pulse">
+                        ⏳ รอคุณครูกดโชว์โพเดียม หรือเริ่มข้อถัดไป...
+                      </span>
                     </div>
                   </div>
 
@@ -1626,8 +1658,67 @@ export const StudentGamePlayPage: React.FC = () => {
               <div className="card-game p-4 sm:p-6 text-center space-y-4">
                 <Trophy className="w-10 h-10 sm:w-12 sm:h-12 mx-auto text-kw-yellow drop-shadow" />
                 <h2 className="font-game text-2xl sm:text-3xl font-extrabold">
-                  {room.status === 'finished' ? 'สรุปผลคะแนนกิจกรรมและโพเดียม!' : 'อันดับคะแนนปัจจุบัน'}
+                  {room.status === 'finished' ? 'สรุปผลคะแนนกิจกรรมและโพเดียม!' : '🏆 โพเดียมผู้นำรอบนี้!'}
                 </h2>
+                {room.status === 'leaderboard' && (
+                  <div className="inline-block px-4 py-1.5 rounded-full bg-slate-900 text-kw-yellow font-game text-xs font-extrabold animate-pulse">
+                    ⏳ พักดูโพเดียม — รอคุณครูกดเริ่มข้อถัดไป...
+                  </div>
+                )}
+
+                {/* Visual Top-3 Podium on Student Screen when Teacher clicks Stop/Podium */}
+                {top3Leaderboard.length > 0 && (
+                  <div className="grid grid-cols-3 gap-2 sm:gap-3 items-end max-w-xl mx-auto pt-2">
+                    {/* 2nd Place */}
+                    <div className="p-2.5 sm:p-3 rounded-2xl bg-slate-100 border-3 border-slate-900 text-center space-y-1">
+                      <div className="font-game text-xs font-extrabold text-slate-700">🥈 #2</div>
+                      {top3Leaderboard[1] ? (
+                        <>
+                          <div className="flex justify-center">
+                            <AvatarRenderer config={top3Leaderboard[1].avatar_config} size="sm" animate={false} />
+                          </div>
+                          <div className="text-xs font-extrabold truncate">{top3Leaderboard[1].nickname}</div>
+                          <div className="text-[11px] font-bold text-kw-blue">
+                            {top3Leaderboard[1].current_score.toLocaleString()} EXP
+                          </div>
+                        </>
+                      ) : (
+                        <div className="text-xs text-slate-400 py-4">-</div>
+                      )}
+                    </div>
+
+                    {/* 1st Place */}
+                    <div className="p-3 sm:p-4 rounded-2xl bg-gradient-to-b from-amber-200 to-kw-yellow border-3 border-slate-900 shadow-block-sm text-center space-y-1 -translate-y-2">
+                      <div className="font-game text-xs sm:text-sm font-extrabold text-kw-red">👑 #1</div>
+                      <div className="flex justify-center">
+                        <AvatarRenderer config={top3Leaderboard[0].avatar_config} size="md" />
+                      </div>
+                      <div className="text-xs sm:text-sm font-extrabold truncate">{top3Leaderboard[0].nickname}</div>
+                      <div className="text-xs font-extrabold text-slate-900">
+                        {top3Leaderboard[0].current_score.toLocaleString()} EXP
+                      </div>
+                    </div>
+
+                    {/* 3rd Place */}
+                    <div className="p-2.5 sm:p-3 rounded-2xl bg-orange-100 border-3 border-slate-900 text-center space-y-1">
+                      <div className="font-game text-xs font-extrabold text-amber-800">🥉 #3</div>
+                      {top3Leaderboard[2] ? (
+                        <>
+                          <div className="flex justify-center">
+                            <AvatarRenderer config={top3Leaderboard[2].avatar_config} size="sm" animate={false} />
+                          </div>
+                          <div className="text-xs font-extrabold truncate">{top3Leaderboard[2].nickname}</div>
+                          <div className="text-[11px] font-bold text-kw-orange">
+                            {top3Leaderboard[2].current_score.toLocaleString()} EXP
+                          </div>
+                        </>
+                      ) : (
+                        <div className="text-xs text-slate-400 py-4">-</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 <p className="text-sm font-bold text-slate-700">
                   คะแนนสอบจริงของคุณ:{' '}
                   <span className="text-kw-green text-xl font-extrabold">
