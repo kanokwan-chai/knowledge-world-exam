@@ -403,8 +403,37 @@ export const TeacherGameHostPage: React.FC = () => {
   }
 
   const joinUrl = `${window.location.origin}/?pin=${room.pin_code}`;
-  const totalQuestions = quiz?.questions?.length ?? 0;
+  const totalQuestions = liveReport?.questions.length ?? quiz?.questions?.length ?? 0;
   const hasMoreQuestions = room.current_question_index + 1 < totalQuestions;
+
+  // Guarantee 100% consistency between Top Podium, Summary Table, and Live Audit Table
+  const reportRowById = new Map(
+    (liveReport?.rows ?? []).map((r) => [r.participant.id, r])
+  );
+  const syncedParticipants = participants
+    .map((p) => {
+      if (p.is_disqualified) return { ...p, correct_count: 0, current_score: 0 };
+      const row = reportRowById.get(p.id);
+      if (!row) return p;
+      const mergedCorrect = Math.max(p.correct_count || 0, row.real_exam_score || 0);
+      const mergedScore = Math.max(
+        p.current_score || 0,
+        row.game_exp_score || 0,
+        mergedCorrect * 1000
+      );
+      return {
+        ...p,
+        correct_count: mergedCorrect,
+        current_score: mergedScore,
+      };
+    })
+    .sort((a, b) => {
+      const dqDiff = Number(Boolean(a.is_disqualified)) - Number(Boolean(b.is_disqualified));
+      if (dqDiff !== 0) return dqDiff;
+      if (b.current_score !== a.current_score) return b.current_score - a.current_score;
+      if (b.correct_count !== a.correct_count) return b.correct_count - a.correct_count;
+      return (a.total_response_ms || 0) - (b.total_response_ms || 0);
+    });
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-6 pb-24 space-y-6">
@@ -938,27 +967,27 @@ export const TeacherGameHostPage: React.FC = () => {
           </div>
 
           {/* Top 3 Podium */}
-          {participants.length > 0 && (
+          {syncedParticipants.length > 0 && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end pt-4">
               {/* 2nd Place */}
-              {participants[1] && (
+              {syncedParticipants[1] && (
                 <div className="p-5 rounded-3xl bg-slate-100 border-4 border-slate-900 text-center space-y-2 order-2 md:order-1">
                   <div className="inline-block px-3 py-1 rounded-full bg-slate-300 border-2 border-slate-900 font-game font-extrabold text-xs">
                     🥈 อันดับ 2
                   </div>
                   <div className="flex justify-center">
-                    <AvatarRenderer config={participants[1].avatar_config} size="md" />
+                    <AvatarRenderer config={syncedParticipants[1].avatar_config} size="md" />
                   </div>
                   <div className="font-game text-xl font-extrabold truncate">
-                    {participants[1].nickname}
+                    {syncedParticipants[1].nickname}
                   </div>
                   <div className="font-game text-2xl font-extrabold text-kw-blue">
-                    {participants[1].current_score.toLocaleString()} pts
+                    {syncedParticipants[1].current_score.toLocaleString()} pts
                   </div>
                   <div className="text-xs font-bold text-slate-600">
-                    ถูก {participants[1].correct_count} ข้อ | เฉลี่ย{' '}
-                    {participants[1].correct_count > 0
-                      ? Math.round(participants[1].total_response_ms / participants[1].correct_count)
+                    ถูก {syncedParticipants[1].correct_count} ข้อ | เฉลี่ย{' '}
+                    {syncedParticipants[1].correct_count > 0
+                      ? Math.round(syncedParticipants[1].total_response_ms / syncedParticipants[1].correct_count)
                       : 0}{' '}
                     ms
                   </div>
@@ -966,24 +995,24 @@ export const TeacherGameHostPage: React.FC = () => {
               )}
 
               {/* 1st Place */}
-              {participants[0] && (
+              {syncedParticipants[0] && (
                 <div className="p-6 rounded-3xl bg-gradient-to-b from-amber-200 to-kw-yellow border-4 border-slate-900 shadow-block text-center space-y-2 order-1 md:order-2 md:-translate-y-4">
                   <div className="inline-block px-4 py-1 rounded-full bg-kw-red text-white border-2 border-slate-900 font-game font-extrabold text-sm">
                     👑 อันดับ 1 CHAMPION
                   </div>
                   <div className="flex justify-center">
-                    <AvatarRenderer config={participants[0].avatar_config} size="lg" />
+                    <AvatarRenderer config={syncedParticipants[0].avatar_config} size="lg" />
                   </div>
                   <div className="font-game text-2xl font-extrabold truncate">
-                    {participants[0].nickname}
+                    {syncedParticipants[0].nickname}
                   </div>
                   <div className="font-game text-3xl font-extrabold text-slate-900">
-                    {participants[0].current_score.toLocaleString()} pts
+                    {syncedParticipants[0].current_score.toLocaleString()} pts
                   </div>
                   <div className="text-xs font-extrabold text-slate-800">
-                    ถูก {participants[0].correct_count} ข้อ | เฉลี่ย{' '}
-                    {participants[0].correct_count > 0
-                      ? Math.round(participants[0].total_response_ms / participants[0].correct_count)
+                    ถูก {syncedParticipants[0].correct_count} ข้อ | เฉลี่ย{' '}
+                    {syncedParticipants[0].correct_count > 0
+                      ? Math.round(syncedParticipants[0].total_response_ms / syncedParticipants[0].correct_count)
                       : 0}{' '}
                     ms
                   </div>
@@ -991,24 +1020,24 @@ export const TeacherGameHostPage: React.FC = () => {
               )}
 
               {/* 3rd Place */}
-              {participants[2] && (
+              {syncedParticipants[2] && (
                 <div className="p-5 rounded-3xl bg-orange-100 border-4 border-slate-900 text-center space-y-2 order-3">
                   <div className="inline-block px-3 py-1 rounded-full bg-amber-600 text-white border-2 border-slate-900 font-game font-extrabold text-xs">
                     🥉 อันดับ 3
                   </div>
                   <div className="flex justify-center">
-                    <AvatarRenderer config={participants[2].avatar_config} size="md" />
+                    <AvatarRenderer config={syncedParticipants[2].avatar_config} size="md" />
                   </div>
                   <div className="font-game text-xl font-extrabold truncate">
-                    {participants[2].nickname}
+                    {syncedParticipants[2].nickname}
                   </div>
                   <div className="font-game text-2xl font-extrabold text-kw-orange">
-                    {participants[2].current_score.toLocaleString()} pts
+                    {syncedParticipants[2].current_score.toLocaleString()} pts
                   </div>
                   <div className="text-xs font-bold text-slate-600">
-                    ถูก {participants[2].correct_count} ข้อ | เฉลี่ย{' '}
-                    {participants[2].correct_count > 0
-                      ? Math.round(participants[2].total_response_ms / participants[2].correct_count)
+                    ถูก {syncedParticipants[2].correct_count} ข้อ | เฉลี่ย{' '}
+                    {syncedParticipants[2].correct_count > 0
+                      ? Math.round(syncedParticipants[2].total_response_ms / syncedParticipants[2].correct_count)
                       : 0}{' '}
                     ms
                   </div>
@@ -1023,7 +1052,7 @@ export const TeacherGameHostPage: React.FC = () => {
               ตารางสรุปคะแนนสอบจริง (ข้อละ 1 คะแนน) & คะแนนเกมอัปเลเวล
             </h3>
             <div className="space-y-2">
-              {participants.slice(0, 10).map((p, i) => (
+              {syncedParticipants.slice(0, 10).map((p, i) => (
                 <div
                   key={p.id}
                   className={`p-3.5 rounded-2xl border-3 border-slate-900 flex flex-wrap items-center justify-between gap-4 ${

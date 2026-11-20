@@ -721,13 +721,13 @@ export async function fetchRoomParticipants(roomId: string): Promise<GamePartici
       .eq('room_id', roomId),
     supabase
       .from('game_answers')
-      .select('participant_id, is_correct, total_points_awarded, response_time_ms')
+      .select('*')
       .eq('room_id', roomId),
   ]);
 
   if (partRes.error) throw new Error(partRes.error.message);
 
-  // Aggregate authoritative scores from game_answers so pardoned students immediately get their exact scores back on the Podium!
+  // Aggregate authoritative scores from game_answers so Podium & Audit Table ALWAYS match 100% (including after pardon!)
   const aggByParticipant = new Map<
     string,
     { correct: number; points: number; responseMs: number }
@@ -737,16 +737,20 @@ export async function fetchRoomParticipants(roomId: string): Promise<GamePartici
     for (const a of ansRes.data as Array<{
       participant_id: string;
       is_correct: boolean;
-      total_points_awarded: number;
-      response_time_ms: number;
+      total_points_awarded?: number;
+      response_time_ms?: number;
     }>) {
       const cur = aggByParticipant.get(a.participant_id) || {
         correct: 0,
         points: 0,
         responseMs: 0,
       };
-      if (a.is_correct) cur.correct += 1;
-      cur.points += Number(a.total_points_awarded || 0);
+      if (a.is_correct) {
+        cur.correct += 1;
+        cur.points += Number(a.total_points_awarded || 1000);
+      } else {
+        cur.points += Number(a.total_points_awarded || 0);
+      }
       cur.responseMs += Number(a.response_time_ms || 0);
       aggByParticipant.set(a.participant_id, cur);
     }
@@ -758,10 +762,15 @@ export async function fetchRoomParticipants(roomId: string): Promise<GamePartici
     }
     const agg = aggByParticipant.get(p.id);
     if (!agg) return p;
+    const restoredCorrect = Math.max(p.correct_count || 0, agg.correct);
+    const restoredScore = Math.max(
+      p.current_score || 0,
+      agg.points > 0 ? agg.points : restoredCorrect * 1000
+    );
     return {
       ...p,
-      correct_count: Math.max(p.correct_count || 0, agg.correct),
-      current_score: Math.max(p.current_score || 0, agg.points),
+      correct_count: restoredCorrect,
+      current_score: restoredScore,
       total_response_ms: p.total_response_ms > 0 ? p.total_response_ms : agg.responseMs,
     };
   });
@@ -1270,11 +1279,19 @@ export async function fetchRoomDetailedReport(roomId: string): Promise<RoomDetai
       };
     });
 
+    const restoredExp = p.is_disqualified
+      ? 0
+      : Math.max(p.current_score || 0, realScore * 1000);
+
     return {
-      participant: p,
+      participant: {
+        ...p,
+        correct_count: p.is_disqualified ? 0 : Math.max(p.correct_count || 0, realScore),
+        current_score: restoredExp,
+      },
       real_exam_score: p.is_disqualified ? 0 : realScore,
       total_questions: questions.length,
-      game_exp_score: p.is_disqualified ? 0 : p.current_score,
+      game_exp_score: restoredExp,
       answered_count: answeredCount,
       cells,
     };
