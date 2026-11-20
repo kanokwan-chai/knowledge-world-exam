@@ -163,6 +163,7 @@ export const StudentGamePlayPage: React.FC = () => {
 
   const broadcastRef = useRef<((event: RealtimeBroadcastEvent) => Promise<void>) | null>(null);
   const disqualifyingRef = useRef<boolean>(false);
+  const wasDisqualifiedRef = useRef<boolean>(false);
   const advancingRef = useRef<boolean>(false);
   const advanceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const questionMountedAtRef = useRef<number>(Date.now());
@@ -673,6 +674,54 @@ export const StudentGamePlayPage: React.FC = () => {
     return () => document.removeEventListener('fullscreenchange', onFsChange);
   }, []);
 
+  // Immediately restore interactive playability when teacher pardons a disqualified student (NO page refresh needed!)
+  const handlePardonRestored = useCallback(
+    (restoredMe: GameParticipant) => {
+      wasDisqualifiedRef.current = false;
+      disqualifyingRef.current = false;
+      advancingRef.current = false;
+      questionMountedAtRef.current = Date.now() + 1000; // 2.5s grace window so focus return won't re-trigger
+      setLocalDisqualifiedReason(null);
+      setSubmitting(false);
+      setError(null);
+      setParticipant((prev) => ({
+        ...restoredMe,
+        avatar_config: prev?.avatar_config || restoredMe.avatar_config,
+      }));
+      participantRef.current = restoredMe;
+      if (roomId) {
+        window.sessionStorage.setItem(`kw_participant_${roomId}`, JSON.stringify(restoredMe));
+      }
+
+      const curRoom = roomRef.current;
+      const curPayload = questionPayloadRef.current;
+      if (curRoom && curRoom.status === 'question_active') {
+        if (!curPayload) {
+          void loadStudentQuestionStep(curRoom, curRoom.current_question_index, restoredMe.id);
+        } else {
+          // Ensure timer is active (> 0s) so all choice buttons are immediately clickable!
+          const endMs = curRoom.question_ends_at ? new Date(curRoom.question_ends_at).getTime() : 0;
+          if (endMs <= Date.now() + 3000) {
+            const freshSec = Math.max(15, curPayload.question.time_limit_seconds || 20);
+            const freshEndsAt = new Date(Date.now() + freshSec * 1000).toISOString();
+            setSecondsLeft(freshSec);
+            setRoom({ ...curRoom, question_ends_at: freshEndsAt });
+          }
+        }
+      }
+
+      setExtraTimeNotice('✅ คุณครูปลดล็อกอนุโลมให้แล้ว! คะแนนเดิมกลับมาครบ สามารถกดตอบต่อได้ทันที!');
+      setTimeout(() => setExtraTimeNotice(null), 4500);
+    },
+    [roomId, loadStudentQuestionStep]
+  );
+
+  useEffect(() => {
+    if (participant?.is_disqualified || localDisqualifiedReason) {
+      wasDisqualifiedRef.current = true;
+    }
+  }, [participant?.is_disqualified, localDisqualifiedReason]);
+
   // Realtime Subscription
   useEffect(() => {
     if (!roomId || !participant) return;
@@ -692,13 +741,17 @@ export const StudentGamePlayPage: React.FC = () => {
               setLeaderboard(parts);
               const me = parts.find((p) => p.id === participant.id);
               if (me) {
-                setParticipant((prev) => ({
-                  ...me,
-                  avatar_config: prev?.avatar_config || me.avatar_config,
-                }));
-                if (!me.is_disqualified) {
-                  setLocalDisqualifiedReason(null);
-                  disqualifyingRef.current = false;
+                if (!me.is_disqualified && wasDisqualifiedRef.current) {
+                  handlePardonRestored(me);
+                } else {
+                  setParticipant((prev) => ({
+                    ...me,
+                    avatar_config: prev?.avatar_config || me.avatar_config,
+                  }));
+                  if (!me.is_disqualified) {
+                    setLocalDisqualifiedReason(null);
+                    disqualifyingRef.current = false;
+                  }
                 }
               }
             })
@@ -710,23 +763,39 @@ export const StudentGamePlayPage: React.FC = () => {
               setLeaderboard(parts);
               const me = parts.find((p) => p.id === participant.id);
               if (me) {
-                setParticipant((prev) => ({
-                  ...me,
-                  avatar_config: prev?.avatar_config || me.avatar_config,
-                }));
-                if (!me.is_disqualified) {
-                  setLocalDisqualifiedReason(null);
-                  disqualifyingRef.current = false;
+                if (!me.is_disqualified && wasDisqualifiedRef.current) {
+                  handlePardonRestored(me);
+                } else {
+                  setParticipant((prev) => ({
+                    ...me,
+                    avatar_config: prev?.avatar_config || me.avatar_config,
+                  }));
+                  if (!me.is_disqualified) {
+                    setLocalDisqualifiedReason(null);
+                    disqualifyingRef.current = false;
+                  }
                 }
               }
             })
             .catch(() => {});
         },
         onBroadcastEvent: (ev) => {
-          if (
+          if (ev.type === 'STUDENT_PARDONED') {
+            if (ev.participant_id === participant.id) {
+              fetchRoomParticipants(roomId)
+                .then((parts) => {
+                  setLeaderboard(parts);
+                  const me = parts.find((p) => p.id === participant.id);
+                  if (me && !me.is_disqualified) {
+                    handlePardonRestored(me);
+                  }
+                })
+                .catch(() => {});
+            }
+            syncGameState();
+          } else if (
             ev.type === 'ROOM_STATUS_CHANGED' ||
-            ev.type === 'GAME_FINISHED' ||
-            ev.type === 'STUDENT_PARDONED'
+            ev.type === 'GAME_FINISHED'
           ) {
             syncGameState();
           } else if (ev.type === 'BATTLE_ATTACK' && roomRef.current?.game_mode !== 'serious_exam') {
@@ -753,10 +822,11 @@ export const StudentGamePlayPage: React.FC = () => {
     return () => sub.unsubscribe();
   }, [roomId, participant?.id, participant?.nickname, syncGameState, applyServerRoomUpdate]);
 
-  // Polling Fallback so Lobby -> Active transitions work reliably even if Realtime is busy
+  // Polling Fallback so Lobby -> Active transitions & Pardons work reliably within 2s even if Realtime is busy
   useEffect(() => {
     if (!roomId || !room || room.status === 'finished') return;
-    const pollMs = room.status === 'lobby' ? 2500 : 5000;
+    const isCurrentlyLocked = Boolean(participant?.is_disqualified || localDisqualifiedReason);
+    const pollMs = room.status === 'lobby' || isCurrentlyLocked ? 2000 : 4500;
 
     const interval = setInterval(async () => {
       try {
@@ -769,13 +839,17 @@ export const StudentGamePlayPage: React.FC = () => {
         if (curPart) {
           const me = parts.find((p) => p.id === curPart.id);
           if (me) {
-            setParticipant((prev) => ({
-              ...me,
-              avatar_config: prev?.avatar_config || me.avatar_config,
-            }));
-            if (!me.is_disqualified) {
-              setLocalDisqualifiedReason(null);
-              disqualifyingRef.current = false;
+            if (!me.is_disqualified && wasDisqualifiedRef.current) {
+              handlePardonRestored(me);
+            } else {
+              setParticipant((prev) => ({
+                ...me,
+                avatar_config: prev?.avatar_config || me.avatar_config,
+              }));
+              if (!me.is_disqualified) {
+                setLocalDisqualifiedReason(null);
+                disqualifyingRef.current = false;
+              }
             }
           }
         }
@@ -788,7 +862,14 @@ export const StudentGamePlayPage: React.FC = () => {
     }, pollMs);
 
     return () => clearInterval(interval);
-  }, [roomId, room?.status, applyServerRoomUpdate]);
+  }, [
+    roomId,
+    room?.status,
+    participant?.is_disqualified,
+    localDisqualifiedReason,
+    applyServerRoomUpdate,
+    handlePardonRestored,
+  ]);
 
   // Auto-advance directly to the next shuffled question!
   const advanceToNextQuestionAuto = useCallback(
@@ -816,10 +897,17 @@ export const StudentGamePlayPage: React.FC = () => {
     [loadStudentQuestionStep]
   );
 
-  // Countdown Timer (Per-Question Time Limit + Auto-Advance on Timeout with 0 pts)
+  // Countdown Timer (Paused while disqualified so pardoned students can immediately resume clicking!)
   useEffect(() => {
-    if (!room || room.status !== 'question_active' || !room.question_ends_at) {
-      setSecondsLeft(0);
+    if (
+      !room ||
+      room.status !== 'question_active' ||
+      !room.question_ends_at ||
+      Boolean(participant?.is_disqualified || localDisqualifiedReason)
+    ) {
+      if (!room || room.status !== 'question_active') {
+        setSecondsLeft(0);
+      }
       return;
     }
 
@@ -847,7 +935,7 @@ export const StudentGamePlayPage: React.FC = () => {
     tick();
     const interval = setInterval(tick, 300);
     return () => clearInterval(interval);
-  }, [room, advanceToNextQuestionAuto]);
+  }, [room, advanceToNextQuestionAuto, participant?.is_disqualified, localDisqualifiedReason]);
 
   // Shuffle choices uniquely per student in Serious Exam mode; keep exact teacher order in Activity Mode!
   const shuffledChoices = useMemo(() => {

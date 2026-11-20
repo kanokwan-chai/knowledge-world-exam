@@ -580,8 +580,13 @@ export const TeacherGameHostPage: React.FC = () => {
                     type="button"
                     onClick={async () => {
                       await pardonParticipantRPC(room.id, p.id);
-                      const parts = await fetchRoomParticipants(room.id);
+                      const [parts, rep] = await Promise.all([
+                        fetchRoomParticipants(room.id),
+                        fetchRoomDetailedReport(room.id).catch(() => null),
+                      ]);
                       setParticipants(parts);
+                      if (rep) setLiveReport(rep);
+                      soundEngine.playCoinSound();
                       await broadcastRef.current?.({
                         type: 'STUDENT_PARDONED',
                         participant_id: p.id,

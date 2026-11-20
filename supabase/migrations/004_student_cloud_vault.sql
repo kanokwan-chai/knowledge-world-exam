@@ -253,3 +253,46 @@ $$;
 
 GRANT EXECUTE ON FUNCTION public.teacher_delete_room_participant(UUID, UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.teacher_delete_student_records(TEXT, TEXT) TO authenticated;
+
+
+-- RPC: Restore exact scores from game_answers whenever Teacher pardons a disqualified student
+CREATE OR REPLACE FUNCTION public.pardon_participant(
+  p_room_id UUID,
+  p_participant_id UUID
+)
+RETURNS public.game_participants
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_room public.game_rooms;
+  v_part public.game_participants;
+BEGIN
+  SELECT * INTO v_room FROM public.game_rooms WHERE id = p_room_id;
+  IF NOT FOUND OR v_room.host_teacher_id <> auth.uid() THEN
+    RAISE EXCEPTION 'เฉพาะคุณครูผู้คุมสอบเท่านั้นที่สามารถปลดล็อกได้';
+  END IF;
+
+  UPDATE public.game_participants gp
+  SET is_disqualified = false,
+      disqualified_reason = NULL,
+      correct_count = COALESCE((
+        SELECT COUNT(*) FROM public.game_answers ga
+        WHERE ga.room_id = p_room_id AND ga.participant_id = p_participant_id AND ga.is_correct = true
+      ), 0),
+      current_score = COALESCE((
+        SELECT SUM(ga.total_points_awarded) FROM public.game_answers ga
+        WHERE ga.room_id = p_room_id AND ga.participant_id = p_participant_id
+      ), 0),
+      total_response_ms = COALESCE((
+        SELECT SUM(ga.response_time_ms) FROM public.game_answers ga
+        WHERE ga.room_id = p_room_id AND ga.participant_id = p_participant_id
+      ), 0),
+      last_seen_at = now()
+  WHERE gp.id = p_participant_id AND gp.room_id = p_room_id
+  RETURNING * INTO v_part;
+
+  RETURN v_part;
+END;
+$$;

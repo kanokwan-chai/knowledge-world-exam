@@ -714,16 +714,68 @@ export async function fetchGameRoomByPin(pinCode: string): Promise<GameRoom | nu
 }
 
 export async function fetchRoomParticipants(roomId: string): Promise<GameParticipant[]> {
-  const { data, error } = await supabase
-    .from('game_participants')
-    .select('*')
-    .eq('room_id', roomId)
-    .order('current_score', { ascending: false })
-    .order('correct_count', { ascending: false })
-    .order('total_response_ms', { ascending: true });
+  const [partRes, ansRes] = await Promise.all([
+    supabase
+      .from('game_participants')
+      .select('*')
+      .eq('room_id', roomId),
+    supabase
+      .from('game_answers')
+      .select('participant_id, is_correct, total_points_awarded, response_time_ms')
+      .eq('room_id', roomId),
+  ]);
 
-  if (error) throw new Error(error.message);
-  return data ?? [];
+  if (partRes.error) throw new Error(partRes.error.message);
+
+  // Aggregate authoritative scores from game_answers so pardoned students immediately get their exact scores back on the Podium!
+  const aggByParticipant = new Map<
+    string,
+    { correct: number; points: number; responseMs: number }
+  >();
+
+  if (!ansRes.error && ansRes.data) {
+    for (const a of ansRes.data as Array<{
+      participant_id: string;
+      is_correct: boolean;
+      total_points_awarded: number;
+      response_time_ms: number;
+    }>) {
+      const cur = aggByParticipant.get(a.participant_id) || {
+        correct: 0,
+        points: 0,
+        responseMs: 0,
+      };
+      if (a.is_correct) cur.correct += 1;
+      cur.points += Number(a.total_points_awarded || 0);
+      cur.responseMs += Number(a.response_time_ms || 0);
+      aggByParticipant.set(a.participant_id, cur);
+    }
+  }
+
+  const normalized: GameParticipant[] = ((partRes.data ?? []) as GameParticipant[]).map((p) => {
+    if (p.is_disqualified) {
+      return { ...p, correct_count: 0, current_score: 0 };
+    }
+    const agg = aggByParticipant.get(p.id);
+    if (!agg) return p;
+    return {
+      ...p,
+      correct_count: Math.max(p.correct_count || 0, agg.correct),
+      current_score: Math.max(p.current_score || 0, agg.points),
+      total_response_ms: p.total_response_ms > 0 ? p.total_response_ms : agg.responseMs,
+    };
+  });
+
+  // Deterministic Podium ranking: non-disqualified first -> current_score DESC -> correct_count DESC -> total_response_ms ASC
+  normalized.sort((a, b) => {
+    const dqDiff = Number(Boolean(a.is_disqualified)) - Number(Boolean(b.is_disqualified));
+    if (dqDiff !== 0) return dqDiff;
+    if (b.current_score !== a.current_score) return b.current_score - a.current_score;
+    if (b.correct_count !== a.correct_count) return b.correct_count - a.correct_count;
+    return (a.total_response_ms || 0) - (b.total_response_ms || 0);
+  });
+
+  return normalized;
 }
 
 export async function getPublicQuestionPayloadRPC(
