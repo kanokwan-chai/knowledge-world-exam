@@ -1144,7 +1144,6 @@ BEGIN
   SET is_disqualified = true,
       disqualified_reason = p_reason,
       current_score = 0,
-      correct_count = 0,
       streak_count = 0,
       last_seen_at = now()
   WHERE id = p_participant_id AND room_id = p_room_id

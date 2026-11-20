@@ -2687,7 +2687,7 @@ export const TeacherDashboard: React.FC = () => {
                               <td className="p-2.5 text-center whitespace-nowrap">
                                 {p.is_disqualified ? (
                                   <span className="px-2 py-0.5 rounded-full bg-red-600 text-white font-extrabold text-[10px]">
-                                    ทุจริต (0)
+                                    🚨 ทุจริต (0 pts)
                                   </span>
                                 ) : (
                                   <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-900 font-extrabold text-[10px]">
@@ -2711,7 +2711,7 @@ export const TeacherDashboard: React.FC = () => {
                                 </td>
                               ))}
                               <td className="p-2.5 text-center font-game text-sm font-extrabold text-emerald-800 whitespace-nowrap">
-                                {p.is_disqualified ? 0 : st.real_exam_score} / {st.total_questions}
+                                {st.real_exam_score} / {st.total_questions}
                               </td>
                             </tr>
 

@@ -757,21 +757,30 @@ export async function fetchRoomParticipants(roomId: string): Promise<GamePartici
   }
 
   const normalized: GameParticipant[] = ((partRes.data ?? []) as GameParticipant[]).map((p) => {
-    if (p.is_disqualified) {
-      return { ...p, correct_count: 0, current_score: 0 };
-    }
     const agg = aggByParticipant.get(p.id);
+    const actualCorrect = Math.max(p.correct_count || 0, agg?.correct || 0);
+    const actualResponseMs = p.total_response_ms > 0 ? p.total_response_ms : agg?.responseMs || 0;
+
+    // When disqualified: Game pts = 0, but keep actual correct_count intact so teacher sees both cheating status & true answers!
+    if (p.is_disqualified) {
+      return {
+        ...p,
+        correct_count: actualCorrect,
+        current_score: 0,
+        total_response_ms: actualResponseMs,
+      };
+    }
+
     if (!agg) return p;
-    const restoredCorrect = Math.max(p.correct_count || 0, agg.correct);
     const restoredScore = Math.max(
       p.current_score || 0,
-      agg.points > 0 ? agg.points : restoredCorrect * 1000
+      agg.points > 0 ? agg.points : actualCorrect * 1000
     );
     return {
       ...p,
-      correct_count: restoredCorrect,
+      correct_count: actualCorrect,
       current_score: restoredScore,
-      total_response_ms: p.total_response_ms > 0 ? p.total_response_ms : agg.responseMs,
+      total_response_ms: actualResponseMs,
     };
   });
 
@@ -1282,14 +1291,15 @@ export async function fetchRoomDetailedReport(roomId: string): Promise<RoomDetai
     const restoredExp = p.is_disqualified
       ? 0
       : Math.max(p.current_score || 0, realScore * 1000);
+    const keptCorrect = Math.max(p.correct_count || 0, realScore);
 
     return {
       participant: {
         ...p,
-        correct_count: p.is_disqualified ? 0 : Math.max(p.correct_count || 0, realScore),
+        correct_count: keptCorrect,
         current_score: restoredExp,
       },
-      real_exam_score: p.is_disqualified ? 0 : realScore,
+      real_exam_score: keptCorrect,
       total_questions: questions.length,
       game_exp_score: restoredExp,
       answered_count: answeredCount,
@@ -1330,9 +1340,6 @@ export function exportDetailedRoomReportExcel(report: RoomDetailedReport): void 
     .map((row, idx) => {
       const cellsHtml = row.cells
         .map((c) => {
-          if (row.participant.is_disqualified) {
-            return `<td style="border:1px solid #000;text-align:center;background:#fee2e2;color:#991b1b;">0 (ทุจริต)</td>`;
-          }
           if (c.unanswered) {
             return `<td style="border:1px solid #000;text-align:center;color:#64748b;">ไม่ตอบ (0)</td>`;
           }

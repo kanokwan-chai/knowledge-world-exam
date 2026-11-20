@@ -412,13 +412,15 @@ export const TeacherGameHostPage: React.FC = () => {
   );
   const syncedParticipants = participants
     .map((p) => {
-      if (p.is_disqualified) return { ...p, correct_count: 0, current_score: 0 };
       const row = reportRowById.get(p.id);
-      if (!row) return p;
-      const mergedCorrect = Math.max(p.correct_count || 0, row.real_exam_score || 0);
+      const mergedCorrect = Math.max(p.correct_count || 0, row?.real_exam_score || 0);
+      // When disqualified: Game pts = 0, but keep actual correct_count intact!
+      if (p.is_disqualified) {
+        return { ...p, correct_count: mergedCorrect, current_score: 0 };
+      }
       const mergedScore = Math.max(
         p.current_score || 0,
-        row.game_exp_score || 0,
+        row?.game_exp_score || 0,
         mergedCorrect * 1000
       );
       return {
@@ -981,6 +983,11 @@ export const TeacherGameHostPage: React.FC = () => {
                   <div className="font-game text-xl font-extrabold truncate">
                     {syncedParticipants[1].nickname}
                   </div>
+                  {syncedParticipants[1].is_disqualified && (
+                    <span className="inline-block px-2 py-0.5 rounded-full bg-red-600 text-white text-[10px] font-extrabold">
+                      🚨 ทุจริต (ปรับ 0 pts)
+                    </span>
+                  )}
                   <div className="font-game text-2xl font-extrabold text-kw-blue">
                     {syncedParticipants[1].current_score.toLocaleString()} pts
                   </div>
@@ -1006,6 +1013,11 @@ export const TeacherGameHostPage: React.FC = () => {
                   <div className="font-game text-2xl font-extrabold truncate">
                     {syncedParticipants[0].nickname}
                   </div>
+                  {syncedParticipants[0].is_disqualified && (
+                    <span className="inline-block px-2.5 py-0.5 rounded-full bg-red-600 text-white text-[11px] font-extrabold">
+                      🚨 ทุจริต (ปรับ 0 pts)
+                    </span>
+                  )}
                   <div className="font-game text-3xl font-extrabold text-slate-900">
                     {syncedParticipants[0].current_score.toLocaleString()} pts
                   </div>
@@ -1031,6 +1043,11 @@ export const TeacherGameHostPage: React.FC = () => {
                   <div className="font-game text-xl font-extrabold truncate">
                     {syncedParticipants[2].nickname}
                   </div>
+                  {syncedParticipants[2].is_disqualified && (
+                    <span className="inline-block px-2 py-0.5 rounded-full bg-red-600 text-white text-[10px] font-extrabold">
+                      🚨 ทุจริต (ปรับ 0 pts)
+                    </span>
+                  )}
                   <div className="font-game text-2xl font-extrabold text-kw-orange">
                     {syncedParticipants[2].current_score.toLocaleString()} pts
                   </div>
@@ -1083,7 +1100,7 @@ export const TeacherGameHostPage: React.FC = () => {
                     <div className="px-3.5 py-1.5 rounded-xl bg-kw-green text-white border-2 border-slate-900 text-center">
                       <span className="block text-[10px] font-extrabold uppercase">คะแนนสอบจริง</span>
                       <span className="font-game text-lg font-extrabold">
-                        {p.is_disqualified ? 0 : p.correct_count} / {totalQuestions || '-'} คะแนน
+                        {p.correct_count} / {totalQuestions || '-'} คะแนน
                       </span>
                     </div>
                     <div className="px-3.5 py-1.5 rounded-xl bg-kw-yellow text-slate-900 border-2 border-slate-900 text-center">
@@ -1195,7 +1212,7 @@ export const TeacherGameHostPage: React.FC = () => {
                           <td className="p-2.5 text-center whitespace-nowrap">
                             {p.is_disqualified ? (
                               <span className="px-2 py-0.5 rounded-full bg-red-600 text-white font-extrabold text-[10px]">
-                                ทุจริต (0)
+                                🚨 ทุจริต (0 pts)
                               </span>
                             ) : (
                               <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-900 font-extrabold text-[10px]">
@@ -1219,7 +1236,7 @@ export const TeacherGameHostPage: React.FC = () => {
                             </td>
                           ))}
                           <td className="p-2.5 text-center font-game text-sm font-extrabold text-emerald-800 whitespace-nowrap">
-                            {p.is_disqualified ? 0 : st.real_exam_score} / {st.total_questions}
+                            {st.real_exam_score} / {st.total_questions}
                           </td>
                         </tr>
 
